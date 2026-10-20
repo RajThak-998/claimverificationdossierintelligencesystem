@@ -1,0 +1,161 @@
+version: '3.8'
+
+networks:
+  motor_net:
+    driver: bridge
+
+volumes:
+  pg_data:
+  redis_data:
+  minio_data:
+
+services:
+  # ============================================================================
+  # 1. Database (PostgreSQL 16)
+  # ============================================================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: motor_postgres
+    restart: always
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: ${DB_NAME:-motor_claims}
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-SecretPostgresPass123!}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    networks:
+      - motor_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ============================================================================
+  # 2. Redis Message Broker & Queue
+  # ============================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: motor_redis
+    restart: always
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    networks:
+      - motor_net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ============================================================================
+  # 3. Object Storage (MinIO S3 Compatible)
+  # ============================================================================
+  minio:
+    image: minio/minio:RELEASE.2024-05-10T01-41-38Z
+    container_name: motor_minio
+    restart: always
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${STORAGE_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${STORAGE_SECRET_KEY:-minioadminpassword123}
+    volumes:
+      - minio_data:/data
+    networks:
+      - motor_net
+
+  # ============================================================================
+  # 4. Stateless Go Backend REST API
+  # ============================================================================
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.api
+    container_name: motor_api
+    restart: always
+    environment:
+      - PORT=8080
+      - DB_DRIVER=postgres
+      - DB_DSN=postgres://${DB_USER:-postgres}:${DB_PASSWORD:-SecretPostgresPass123!}@postgres:5432/${DB_NAME:-motor_claims}?sslmode=disable
+      - REDIS_ADDR=redis:6379
+      - REDIS_PASSWORD=
+      - STORAGE_DRIVER=minio
+      - STORAGE_ENDPOINT=minio:9000
+      - STORAGE_BUCKET=${STORAGE_BUCKET:-motor-claims-vault}
+      - STORAGE_ACCESS_KEY=${STORAGE_ACCESS_KEY:-minioadmin}
+      - STORAGE_SECRET_KEY=${STORAGE_SECRET_KEY:-minioadminpassword123}
+      - STORAGE_USE_SSL=false
+      - JWT_SECRET=${JWT_SECRET:-super-secret-jwt-signing-key-32chars}
+      - APP_ENV=production
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - motor_net
+
+  # ============================================================================
+  # 5. Go Background Worker (FFmpeg Concatenation & PDF Compiler)
+  # ============================================================================
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.worker
+    container_name: motor_worker
+    restart: always
+    environment:
+      - DB_DRIVER=postgres
+      - DB_DSN=postgres://${DB_USER:-postgres}:${DB_PASSWORD:-SecretPostgresPass123!}@postgres:5432/${DB_NAME:-motor_claims}?sslmode=disable
+      - REDIS_ADDR=redis:6379
+      - REDIS_PASSWORD=
+      - STORAGE_DRIVER=minio
+      - STORAGE_ENDPOINT=minio:9000
+      - STORAGE_BUCKET=${STORAGE_BUCKET:-motor-claims-vault}
+      - STORAGE_ACCESS_KEY=${STORAGE_ACCESS_KEY:-minioadmin}
+      - STORAGE_SECRET_KEY=${STORAGE_SECRET_KEY:-minioadminpassword123}
+      - STORAGE_USE_SSL=false
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - motor_net
+
+  # ============================================================================
+  # 6. Frontend Dashboard (React / Vite)
+  # ============================================================================
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: motor_frontend
+    restart: always
+    networks:
+      - motor_net
+
+  # ============================================================================
+  # 7. Reverse Proxy & SSL (Nginx)
+  # ============================================================================
+  nginx:
+    image: nginx:alpine
+    container_name: motor_nginx
+    restart: always
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - frontend
+      - api
+    networks:
+      - motor_net
