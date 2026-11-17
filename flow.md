@@ -196,4 +196,46 @@ flowchart TD
 | **Phase 4** | `GET /api/v1/public/verify/dossier/:uuid` | E2E | ✅ PASS | Public endpoint returns `AUTHENTIC_UNTAMPERED`, SHA-256 checksum, recorded seconds |
 | **Phase 5** | `GET /api/v1/billing/metrics` | E2E | ✅ PASS | Integer second summation, `CEIL(duration / 60)` billable minutes, rate card calculation |
 | **Frontend** | `npm run build` (React + TypeScript) | Build | ✅ PASS | Clean Vite compilation in 1.84s, zero type errors, Tailwind bundle generated |
+| **Agent Dossier** | `GET /storage/cases/case-hgv-101/documents/...` | E2E | ✅ PASS | Inline PDF serving with 200 OK & `Content-Disposition: inline` for all 6 claim documents |
+| **Screenshots Vault** | `GET /storage/cases/case-hgv-101/screenshots/...` | E2E | ✅ PASS | PNG image serving with 200 OK & `Content-Type: image/png` for odometer, damage, driver snapshots |
+| **Direct Recording** | `POST /api/v1/cases/:id/recordings/direct` | E2E | ✅ PASS | Direct single-file upload, in-memory SHA-256 calculation, instant `READY` status |
+| **Zero-State Filtering** | `GET /api/v1/cases?vehicle_class=LMV` | Integration | ✅ PASS | Empty slice serializes as `[]`, friendly "Nothing to show" card rendered without crashing |
+
+---
+
+## 7. Agent Interactive Testing Workflow (Case MOT18221241)
+
+1. **Access Application**: Navigate to `http://localhost:3000`.
+2. **Authenticate as Field Agent**:
+   - Click **🕵️ Palak Gupta (Senior Field Investigator)** on the 1-click persona bar (or `agent.palak@agency.com` / `Password123!`).
+3. **Open Investigation Dossier**:
+   - Locate active case **`MOT18221241`** (`Tata Prima 4028.S`, Heavy Commercial Vehicle, status: `WORK_IN_PROGRESS`).
+   - Click **"Open Investigation Dossier"**.
+4. **Inspect Pre-Populated Evidence Files (Section 4)**:
+   - Click **Section 4: Evidence Files** on the left navigation bar.
+   - Click on the external link icon (`↗`) for each document to view in full screen (RC, DL, GD Memo, Goods Permit, Weighbridge Challan, Garage Estimate).
+5. **Inspect Live Video Screenshots (Section 5)**:
+   - View captured frames: Odometer reading & chassis plate, cabin impact crush, driver badge verification.
+6. **WhatsApp Tele-Verification with Permanent Moveable Controls (Section 2)**:
+   - Open **Section 2: Tele-Verification & Live Stream**.
+   - Click **"WhatsApp Call"** next to any contact (or "Launch WhatsApp & Recorder").
+   - **Stable & Permanent Workflow**:
+     1. Automatically opens **WhatsApp Web** with that contact's phone (`https://web.whatsapp.com/send?phone=...`).
+     2. Two **permanent, separate, moveable floating pill buttons** appear on screen (`z-[99999]`):
+        - **Button 1 (Recording)**: `[ 🔴 ● REC ]` / `[ 🔴 ■ STOP ]`, `[ ⏸ PAUSE / ▶ RESUME ]`, live timer `00:00`.
+        - **Button 2 (Capture)**: `[ 🟢 📷 CAPTURE ]` with live snapshot count badge.
+     3. Both buttons are independent and draggable anywhere on screen; positions are remembered across sessions.
+     4. Click **`[ ● REC ]`**: Prompts you to pick your WhatsApp window/screen. Recording starts immediately with audio!
+     5. Click **`[ ⏸ PAUSE / ▶ RESUME ]`**: Pauses and resumes recording on demand.
+     6. Click **`[ 🟢 📷 CAPTURE ]`**: Snaps live video frames reliably directly into the dossier screenshot gallery.
+     7. Click **`[ 🔴 ■ STOP ]`**: Flushes all buffers (`requestData`), finalizes the `.webm` video, and uploads directly to the database (guaranteed non-zero file size!).
+7. **Play Recorded Video in Dossier (Section 3)**:
+   - Open **Section 3: Case Recordings Vault** to play the recorded video in the HTML5 player with exact duration and seek bar.
+8. **Test Filter Empty States**:
+   - Switch filter to **Light Motor Vehicles (LMV)**: Notice the clean, calm *"Nothing to show"* card with a *"Reset All Filters"* button (no white screen crash).
+9. **Complete 10 Compulsory Investigation Observations (Section 6)**:
+   - Fill driver & insured statements, damage consistency, and ground of repudiation.
+10. **Final Submit to Review Queue (Section 7)**:
+   - Save draft or click **"Submit Dossier to Review Queue"** to lock the case and hand off to Manager/Admin.
+
 

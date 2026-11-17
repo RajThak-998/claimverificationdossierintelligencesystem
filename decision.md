@@ -166,3 +166,116 @@ This document logs all critical architectural, security, design, and implementat
   - Greatly simplifies evaluation and user acceptance testing (UAT).
   - Demonstrates strict RBAC row-level data isolation dynamically.
 
+---
+
+### DEC-016: Authentic Insurance Document Generation & Inline Browser Preview Delivery
+* **Context**: Field testing the end-to-end Agent investigation flow requires realistic insurance case documents (RC, DL, FIR/GD Memo, Goods Permit, Weighbridge Gross Slip, Garage Estimate) and in-call live screenshots, which must be immediately viewable in the agent dashboard without forced binary downloads.
+* **Decision**: 
+  - Generated pure, specification-compliant PDF v1.4 documents and PNGs directly in `data/storage/cases/case-hgv-101/` using a zero-dependency Python script.
+  - Configured Go REST API `/storage/*filepath` endpoint to inject `Content-Disposition: inline; filename=...` and correct `Content-Type: application/pdf` headers.
+  - Linked database seeds directly to seeded documents so any freshly initialized platform instance provides pre-populated evidence dossiers ready for investigation review.
+* **Rationale**:
+  - Completely frictionless UAT testing for investigators and claims managers.
+  - Browser-native PDF viewing in modern tabs and iframes without requiring external PDF plugins or third-party PDF services.
+
+---
+
+### DEC-017: Removal of Redis & Background Worker in Favor of Native Go Goroutines
+* **Context**: The platform is tailored for agency operations (~100 agents). Heavy Redis queues and a dedicated Asynq worker daemon introduced unnecessary CPU/RAM overhead and Docker complexity.
+* **Decision**: Dropped Redis entirely, removed the `motor_worker` container, and migrated background jobs (e.g., asynchronous PDF dossier compilation) to Go native non-blocking in-memory goroutines.
+* **Rationale**:
+  - Halves the system's runtime compute and memory footprint.
+  - Reduces operational costs when deploying to AWS (no need for AWS ElastiCache cluster).
+  - Keeps the platform lightweight, reliable, and completely self-contained (Go API + PostgreSQL).
+
+---
+
+### DEC-018: Direct Single-Stream Video Recording & Instant Cryptographic Hashing
+* **Context**: 5-second chunk slicing previously caused unfinalized WebM headers and pending stitching jobs that reported "0M 0s" and failed playback.
+* **Decision**: 
+  - Implemented `POST /api/v1/cases/:id/recordings/direct` where stopping the recording uploads a single finalized `.webm` file.
+  - SHA-256 hash is computed immediately in memory during upload, and the database record is saved with `status: READY` and exact duration.
+  - Dossier Section 3 upgraded with an HTML5 `<video controls>` player for immediate playback, seeking, and download.
+* **Rationale**:
+  - 100% reliable recording playback with accurate duration display.
+  - Aligns with operational reality: if a call drops, the investigator simply calls back without needing multi-chunk recovery algorithms.
+
+---
+
+### DEC-019: Floating Draggable WhatsApp Tele-Verification Widget with Zero-Prompt Session
+* **Context**: Field investigators conduct WhatsApp video calls with claimants on their desktop while simultaneously reviewing policy documents and typing observation notes.
+* **Decision**: 
+  - Created a global floating pill widget (`FloatingCallWidget`) matching WhatsApp call window controls with `[ 🔴 ■ STOP ]` (live timer) and `[ 🟢 📷 CAPTURE ]`.
+  - The widget is draggable to any position on the screen, never auto-prompts screen share on tab mount, and allows live video frame snapshot capture directly into the case screenshot gallery.
+* **Rationale**:
+  - Eliminates browser permission fatigue.
+  - Provides a frictionless, calm user experience for non-technical field agents.
+
+---
+
+### DEC-020: Resilient Array Serialization & "Nothing to Show" Empty States
+* **Context**: When filtering by categories with zero matching claims (e.g. LMV or Work-in-Progress for an agent with only Heavy Truck claims), Go serialized empty slices as `null`, causing frontend `TypeError` crashes and blank white screens.
+* **Decision**: 
+  - Backend initializes `responseItems := make([]CaseResponseItem, 0)` so it always serializes to `[]`.
+  - Frontend guards with `Array.isArray(res.data) ? res.data : []` and displays a comforting "Nothing to show" empty state card with a "Reset All Filters" button.
+* **Rationale**:
+  - Prevents UI crashes and delivers a reassuring, professional user experience.
+
+---
+
+### DEC-021: Modular Separate Floating Call Buttons & Pre-WhatsApp Permission Acquisition
+* **Context**: A unified wide bar took up too much screen space over WhatsApp call windows, snapshot grabbing failed due to unmounted video decoding delays, and clicking the call button did not automatically redirect to WhatsApp.
+* **Decision**: 
+  - Designed two distinct, modular floating pill widgets:
+    1. **Recording Pill**: `[ 🔴 ● REC / ■ STOP | 00:00 ]` (draggable independently).
+    2. **Capture Pill**: `[ 🟢 📷 CAPTURE ]` with live snapshot count badge (draggable independently).
+  - Streamlined Tele-Verification workflow:
+    1. Clicking "WhatsApp Call" prompts screen sharing permission FIRST.
+    2. Once granted, immediately opens WhatsApp Web/Desktop with the contact's phone number (`https://web.whatsapp.com/send?phone=...`).
+    3. The two separate buttons appear with the stream already warm, so clicking `[ ● REC ]` starts recording instantly without secondary permission dialogs.
+  - Fortified snapshot capture using dual-pipeline: native Chromium `ImageCapture.grabFrame()` with fallback to a hidden, continuously decoded DOM video element.
+* **Rationale**:
+  - Extreme space efficiency over third-party call windows.
+  - Zero-friction WhatsApp tele-verification flow for field investigators.
+  - 100% reliable frame grabbing without decoding errors.
+
+---
+
+### DEC-022: Document Picture-in-Picture OS Always-On-Top Window & Just-In-Time Stream Acquisition
+* **Context**: 
+  - In-browser HTML `div`s cannot float over external OS applications like the native WhatsApp Desktop client.
+  - Eager screen acquisition before redirecting caused media tracks to terminate (`readyState = ended`), triggering "Failed to start rec..." and "Screen share not active".
+* **Decision**: 
+  - **Native OS Floating Window**: Integrated the W3C **Document Picture-in-Picture API** (`window.documentPictureInPicture.requestWindow({ width: 370, height: 80 })`). Using `ReactDOM.createPortal()`, the separate `[ ● REC / ■ STOP ]` and `[ 📷 CAPTURE ]` buttons are projected into a genuine **Always-On-Top OS window** that floats directly over the native WhatsApp Desktop app.
+  - **Just-In-Time Stream Acquisition**: `getDisplayMedia` is triggered on demand when the agent clicks `[ ● REC ]`. This guarantees a freshly initialized, active video stream with zero stale or ended tracks.
+  - **Direct WhatsApp Launch**: Clicking "WhatsApp Call" opens WhatsApp Web/Desktop immediately (`https://web.whatsapp.com/send?phone=...`) and mounts the floating PiP controls simultaneously.
+* **Rationale**:
+  - True multi-window desktop interoperability without installing external native wrappers.
+  - 100% resilient stream initialization and zero-failure frame captures.
+
+---
+
+### DEC-023: Permanent In-DOM Moveable Call Widgets with Pause/Resume & Forced Buffer Flush
+* **Context**: 
+  - Document PiP windows were fragile and dismissed automatically when clicking away or switching tabs, disrupting continuous tele-investigation.
+  - Eagerly calling `mediaRecorder.stop()` without flushing internal codec buffers occasionally caused 0-byte WebM file uploads.
+  - Agents required separate, permanently positioned, draggable buttons with pause/resume controls that remain visible across all dossier tabs until explicitly closed.
+* **Decision**: 
+  - **Removed PiP in favor of Permanent In-DOM Widgets**: Created two completely independent, floating, draggable pill widgets with `z-[99999]`:
+    1. **Recording Pill**: `[ 🔴 ● REC ]` / `[ 🔴 ■ STOP ]`, `[ ⏸ PAUSE / ▶ RESUME ]`, and live timer.
+    2. **Capture Pill**: `[ 🟢 📷 CAPTURE ]` with live snapshot count badge.
+    - Widget positions persist in `localStorage` so agents can place them wherever convenient on their screen.
+  - **Guaranteed Non-Zero Video Uploads**:
+    - Invoked `mediaRecorder.requestData()` before `stop()` to force-flush all buffered frames.
+    - Wrapped stop in a Promise resolving on the final `onstop` event before creating the Blob.
+    - Added backend rejection for `fileHeader.Size == 0`.
+* **Rationale**:
+  - Permanent, stable interface that never disappears mid-call.
+  - Eliminates 0-byte corrupt recordings.
+  - Empowers investigators to pause during off-topic dialogue and resume smoothly.
+
+
+
+
+
+

@@ -29,7 +29,7 @@ interface DossierModalProps {
   currentUser: any;
   onClose: () => void;
   onRefreshList: () => void;
-  onStartTeleVerification: (caseId: string, contactId?: string, contactPhone?: string) => void;
+  onStartTeleVerification: (caseId: string, contactId?: string, contactPhone?: string, caseNumber?: string, contactName?: string) => void;
 }
 
 export const DossierModal: React.FC<DossierModalProps> = ({
@@ -497,7 +497,30 @@ export const DossierModal: React.FC<DossierModalProps> = ({
 
           {/* SECTION 2: DOSSIER CONTACTS & ACTIONABLE CALLBACK REMARKS */}
           {activeSection === 2 && (
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div className="space-y-6">
+              {/* Quick Launch Floating Call Widget Banner */}
+              <div className="p-4 rounded-xl bg-slate-900 text-white flex flex-col sm:flex-row items-center justify-between gap-4 shadow-md border border-slate-700">
+                <div className="flex items-center space-x-3.5">
+                  <div className="w-10 h-10 rounded-xl bg-rose-600/20 border border-rose-500/40 flex items-center justify-center text-rose-400 shrink-0">
+                    <Video className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <div className="font-bold text-sm">WhatsApp Call Recorder & Live Frame Grabber</div>
+                    <div className="text-xs text-slate-400">
+                      Prompts screen share, opens WhatsApp Web, and docks separate <strong>[● REC]</strong> & <strong>[📷 CAPTURE]</strong> buttons.
+                    </div>
+                  </div>
+                </div>
+                <button
+                  onClick={() => onStartTeleVerification(cs.id, undefined, cs.insured_primary_phone, cs.case_number, cs.insured_name)}
+                  className="px-4 py-2 rounded-full bg-emerald-600 hover:bg-emerald-500 font-bold text-xs flex items-center space-x-2 text-white shadow-md shadow-emerald-900/40 shrink-0 transition-colors"
+                >
+                  <Video className="w-4 h-4" />
+                  <span>Launch WhatsApp & Recorder</span>
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               {/* Left Column: Registered Contacts Directory */}
               <div className="bg-white rounded-xl p-5 border border-slate-200 shadow-xs flex flex-col justify-between">
                 <div>
@@ -548,14 +571,14 @@ export const DossierModal: React.FC<DossierModalProps> = ({
                               <Phone className="w-4 h-4" />
                             </button>
 
-                            {/* Core Action: Chat & Record (Launches WhatsApp + In-browser recorder) */}
+                            {/* Core Action: WhatsApp Call & Record */}
                             <button
-                              onClick={() => onStartTeleVerification(cs.id, c.id, c.phone)}
+                              onClick={() => onStartTeleVerification(cs.id, c.id, c.phone, cs.case_number, c.full_name)}
                               className="inline-flex items-center space-x-1.5 px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-sm transition-colors"
-                              title="Launch WhatsApp Web & Start 5-Second Browser Recorder Stream"
+                              title="Prompt screen share, open WhatsApp Web with contact, and launch separate floating buttons"
                             >
                               <Video className="w-4 h-4" />
-                              <span>Chat & Record</span>
+                              <span>WhatsApp Call</span>
                             </button>
                           </div>
                         </div>
@@ -614,7 +637,8 @@ export const DossierModal: React.FC<DossierModalProps> = ({
                 </div>
               </div>
             </div>
-          )}
+          </div>
+        )}
 
           {/* SECTION 3: CASE RECORDINGS VAULT */}
           {activeSection === 3 && (
@@ -666,14 +690,30 @@ export const DossierModal: React.FC<DossierModalProps> = ({
                         </div>
                       </div>
 
-                      {/* Stream audio/video player if ready */}
-                      {rec.master_storage_path && (
-                        <div className="flex items-center space-x-2">
-                          <audio
+                      {/* Video Player */}
+                      {rec.master_storage_path ? (
+                        <div className="flex flex-col sm:flex-row items-center gap-3 w-full md:w-auto">
+                          <video
                             controls
-                            className="h-9 w-64"
+                            preload="metadata"
+                            className="h-32 w-full sm:w-60 rounded-lg bg-black object-contain shadow-xs border border-slate-800"
                             src={`/storage/${rec.master_storage_path}`}
                           />
+                          <a
+                            href={`/storage/${rec.master_storage_path}`}
+                            download
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center space-x-1 px-2.5 py-1.5 text-[11px] font-semibold text-slate-700 bg-white hover:bg-slate-100 rounded-lg border border-slate-300 shadow-2xs"
+                            title="Open recording file"
+                          >
+                            <ExternalLink className="w-3.5 h-3.5" />
+                            <span>Open</span>
+                          </a>
+                        </div>
+                      ) : (
+                        <div className="text-xs text-amber-600 bg-amber-50 px-3 py-1.5 rounded-lg border border-amber-200">
+                          Processing recording...
                         </div>
                       )}
                     </div>

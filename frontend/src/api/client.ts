@@ -108,6 +108,15 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ duration_seconds: durationSeconds }),
     }),
+  uploadDirectRecording: (caseId: string, blob: Blob, durationSeconds: number) => {
+    const formData = new FormData();
+    formData.append('recording_file', blob, `rec_${Date.now()}.webm`);
+    formData.append('duration_seconds', durationSeconds.toString());
+    return request<any>(`/cases/${caseId}/recordings/direct`, {
+      method: 'POST',
+      body: formData,
+    });
+  },
   uploadFallbackRecording: (caseId: string, file: File, durationSeconds: number) => {
     const formData = new FormData();
     formData.append('recording_file', file);

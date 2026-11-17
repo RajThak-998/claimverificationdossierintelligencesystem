@@ -57,10 +57,11 @@ export const CasesVault: React.FC<CasesVaultProps> = ({
       if (searchQuery) params.search = searchQuery;
 
       const res = await api.getCases(params);
-      setCases(res.data);
-      setCounts(res.counts);
+      setCases(Array.isArray(res.data) ? res.data : []);
+      setCounts(res.counts || {});
     } catch (err) {
       console.error('Failed to load cases:', err);
+      setCases([]);
     } finally {
       setLoading(false);
     }
@@ -325,10 +326,33 @@ export const CasesVault: React.FC<CasesVaultProps> = ({
                 </tr>
               ) : cases.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="text-center py-12 text-slate-400">
-                    <AlertCircle className="w-8 h-8 mx-auto mb-2 text-slate-300" />
-                    <p className="font-semibold text-slate-600">No matching claims found</p>
-                    <p className="text-xs text-slate-400 mt-1">Try clearing filters or search queries</p>
+                  <td colSpan={6} className="text-center py-16 text-slate-400">
+                    <div className="max-w-xs mx-auto space-y-3">
+                      <div className="w-12 h-12 rounded-2xl bg-slate-100 flex items-center justify-center mx-auto text-slate-400">
+                        <AlertCircle className="w-6 h-6" />
+                      </div>
+                      <div>
+                        <p className="font-bold text-slate-700 text-sm">Nothing to show</p>
+                        <p className="text-xs text-slate-400 mt-1">
+                          No claims found for this filter combination (Vehicle Class / Status).
+                        </p>
+                      </div>
+                      {(vehicleClass || claimType || statusFilter || showReassignedOnly || searchQuery) && (
+                        <button
+                          onClick={() => {
+                            setVehicleClass('');
+                            setClaimType('');
+                            setStatusFilter('');
+                            setShowReassignedOnly(false);
+                            setSearchQuery('');
+                          }}
+                          className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-trust-50 text-trust-700 hover:bg-trust-100 border border-trust-200 transition-colors"
+                        >
+                          <RefreshCw className="w-3.5 h-3.5" />
+                          <span>Reset All Filters</span>
+                        </button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ) : (

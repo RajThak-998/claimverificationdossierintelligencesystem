@@ -3,7 +3,7 @@ import { Shield, Lock, Mail, ArrowRight, UserCheck, AlertCircle } from 'lucide-r
 import { NavigationBar } from './components/NavigationBar';
 import { CasesVault } from './components/CasesVault';
 import { DossierModal } from './components/DossierModal';
-import { TeleVerificationBar } from './components/TeleVerificationBar';
+import { SeparateCallWidgets } from './components/SeparateCallWidgets';
 import { AddCaseModal } from './components/AddCaseModal';
 import { BulkImportModal } from './components/BulkImportModal';
 import { AgentHub } from './components/AgentHub';
@@ -27,12 +27,32 @@ export const App: React.FC = () => {
   const [showImportModal, setShowImportModal] = useState<boolean>(false);
   const [refreshTrigger, setRefreshTrigger] = useState<number>(0);
 
-  // Tele-Verification active state
-  const [activeTeleVerification, setActiveTeleVerification] = useState<{
+  // Active Tele-Verification session (Separate Buttons + WhatsApp)
+  const [activeCallSession, setActiveCallSession] = useState<{
     caseId: string;
-    contactId?: string;
+    caseNumber?: string;
     contactPhone?: string;
+    contactName?: string;
   } | null>(null);
+
+  const handleStartTeleVerification = (caseId: string, _contactId?: string, contactPhone?: string, caseNumber?: string, contactName?: string) => {
+    // 1. Mount floating buttons FIRST so PiP window opens immediately
+    setActiveCallSession({
+      caseId,
+      caseNumber,
+      contactPhone,
+      contactName,
+    });
+
+    // 2. Redirect to WhatsApp with contact's phone (opens in new tab)
+    if (contactPhone) {
+      const cleanPhone = contactPhone.replace(/[^0-9]/g, '');
+      // Small delay to ensure PiP window is requested before tab switch
+      setTimeout(() => {
+        window.open(`https://web.whatsapp.com/send?phone=${cleanPhone}`, '_blank');
+      }, 300);
+    }
+  };
 
   // Login form state
   const [loginEmail, setLoginEmail] = useState('admin@agency.com');
@@ -278,9 +298,7 @@ export const App: React.FC = () => {
           currentUser={currentUser}
           onClose={() => setSelectedCaseId(null)}
           onRefreshList={() => setRefreshTrigger((prev) => prev + 1)}
-          onStartTeleVerification={(caseId, contactId, contactPhone) => {
-            setActiveTeleVerification({ caseId, contactId, contactPhone });
-          }}
+          onStartTeleVerification={handleStartTeleVerification}
         />
       )}
 
@@ -306,14 +324,15 @@ export const App: React.FC = () => {
         />
       )}
 
-      {/* Floating Tele-Verification Bar (Active WhatsApp Web & 5s MediaRecorder Session) */}
-      {activeTeleVerification && (
-        <TeleVerificationBar
-          caseId={activeTeleVerification.caseId}
-          contactId={activeTeleVerification.contactId}
-          contactPhone={activeTeleVerification.contactPhone}
-          onFinish={() => {
-            setActiveTeleVerification(null);
+      {/* Always-On-Top OS PiP Floating Buttons: [● REC/■ STOP/⏸ PAUSE] and [📷 CAPTURE] */}
+      {activeCallSession && (
+        <SeparateCallWidgets
+          caseId={activeCallSession.caseId}
+          caseNumber={activeCallSession.caseNumber}
+          contactPhone={activeCallSession.contactPhone}
+          contactName={activeCallSession.contactName}
+          onClose={() => setActiveCallSession(null)}
+          onRecordingSaved={() => {
             setRefreshTrigger((prev) => prev + 1);
           }}
         />
