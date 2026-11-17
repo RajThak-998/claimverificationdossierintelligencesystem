@@ -1,8 +1,13 @@
 package handlers
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"io"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -166,7 +171,7 @@ func (h *RecordingHandler) StopRecording(c *gin.Context) {
 	})
 }
 
-func (h *RecordingHandler) UploadFallbackRecording(c *gin.Context) {
+func (h *RecordingHandler) UploadDirectRecording(c *gin.Context) {
 	caseID := c.Param("id")
 	claims, _ := auth.GetUserClaims(c)
 
@@ -175,10 +180,14 @@ func (h *RecordingHandler) UploadFallbackRecording(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "missing recording_file"})
 		return
 	}
+	if fileHeader.Size == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "uploaded recording file is empty (0 bytes). Ensure recording captured video."})
+		return
+	}
 
 	durationSec, _ := strconv.Atoi(c.PostForm("duration_seconds"))
-	if durationSec <= 0 {
-		durationSec = 60 // default 1 min
+	if durationSec < 1 {
+		durationSec = 1
 	}
 
 	fileReader, err := fileHeader.Open()
@@ -188,10 +197,30 @@ func (h *RecordingHandler) UploadFallbackRecording(c *gin.Context) {
 	}
 	defer fileReader.Close()
 
-	now := time.Now().UTC()
-	storagePath := fmt.Sprintf("cases/%s/recordings/rec_%d_%s", caseID, now.Unix(), fileHeader.Filename)
+	// Compute SHA-256 hash while buffering to memory
+	hasher := sha256.New()
+	buf := new(bytes.Buffer)
+	tee := io.TeeReader(fileReader, hasher)
+	if _, err := io.Copy(buf, tee); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to buffer recording: " + err.Error()})
+		return
+	}
+	checksum := hex.EncodeToString(hasher.Sum(nil))
 
-	_, err = h.storageProvider.UploadFile(c.Request.Context(), fileReader, storagePath, fileHeader.Size, fileHeader.Header.Get("Content-Type"))
+	now := time.Now().UTC()
+	ext := filepath.Ext(fileHeader.Filename)
+	if ext == "" {
+		ext = ".webm"
+	}
+	storagePath := fmt.Sprintf("cases/%s/recordings/rec_%d%s", caseID, now.Unix(), ext)
+
+	mimeType := fileHeader.Header.Get("Content-Type")
+	if mimeType == "" {
+		mimeType = "video/webm"
+	}
+
+	fileSize := int64(buf.Len())
+	_, err = h.storageProvider.UploadFile(c.Request.Context(), buf, storagePath, fileSize, mimeType)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "storage upload failed: " + err.Error()})
 		return
@@ -203,8 +232,9 @@ func (h *RecordingHandler) UploadFallbackRecording(c *gin.Context) {
 		Status:            models.RecordingReady,
 		DurationSeconds:   durationSec,
 		MasterStoragePath: &storagePath,
-		FileSizeBytes:     fileHeader.Size,
-		MimeType:          fileHeader.Header.Get("Content-Type"),
+		FileSizeBytes:     fileSize,
+		MimeType:          mimeType,
+		SHA256Checksum:    &checksum,
 		StartedAt:         now.Add(-time.Duration(durationSec) * time.Second),
 		StoppedAt:         &now,
 	}
@@ -213,7 +243,19 @@ func (h *RecordingHandler) UploadFallbackRecording(c *gin.Context) {
 	// Increment total duration in case
 	h.db.Model(&models.Case{}).Where("id = ?", caseID).Update("total_duration_seconds", gorm.Expr("total_duration_seconds + ?", durationSec))
 
+	// Add audit log
+	h.db.Create(&models.CaseAuditLog{
+		CaseID:  caseID,
+		ActorID: claims.UserID,
+		Action:  "RECORDING_UPLOADED",
+		Remarks: fmt.Sprintf("Direct recording uploaded: %d seconds, SHA-256: %s", durationSec, checksum[:16]),
+	})
+
 	c.JSON(http.StatusCreated, rec)
+}
+
+func (h *RecordingHandler) UploadFallbackRecording(c *gin.Context) {
+	h.UploadDirectRecording(c)
 }
 
 func (h *RecordingHandler) UploadScreenshot(c *gin.Context) {

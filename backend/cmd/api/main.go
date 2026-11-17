@@ -135,6 +135,12 @@ func main() {
 		fullPath := filepath.Join(cfg.StorageBaseDir, cleanPath)
 
 		if fi, err := os.Stat(fullPath); err == nil && !fi.IsDir() {
+			if strings.HasSuffix(cleanPath, ".pdf") {
+				c.Header("Content-Disposition", "inline; filename="+filepath.Base(cleanPath))
+				c.Header("Content-Type", "application/pdf")
+			} else if strings.HasSuffix(cleanPath, ".webm") {
+				c.Header("Content-Type", "video/webm")
+			}
 			c.File(fullPath)
 			return
 		}
@@ -146,7 +152,21 @@ func main() {
 			return
 		}
 		defer reader.Close()
-		c.DataFromReader(http.StatusOK, -1, "application/octet-stream", reader, nil)
+
+		mimeType := "application/octet-stream"
+		if strings.HasSuffix(cleanPath, ".pdf") {
+			mimeType = "application/pdf"
+			c.Header("Content-Disposition", "inline; filename="+filepath.Base(cleanPath))
+		} else if strings.HasSuffix(cleanPath, ".html") {
+			mimeType = "text/html; charset=utf-8"
+		} else if strings.HasSuffix(cleanPath, ".png") {
+			mimeType = "image/png"
+		} else if strings.HasSuffix(cleanPath, ".jpg") || strings.HasSuffix(cleanPath, ".jpeg") {
+			mimeType = "image/jpeg"
+		} else if strings.HasSuffix(cleanPath, ".webm") {
+			mimeType = "video/webm"
+		}
+		c.DataFromReader(http.StatusOK, -1, mimeType, reader, nil)
 	})
 
 	// Public Health Endpoint
@@ -211,11 +231,12 @@ func main() {
 				c.JSON(http.StatusNotFound, gin.H{"error": "dossier not ready yet"})
 			})
 
-			// Tele-Verification & Media Streaming (5s Chunks)
+			// Tele-Verification & Media Streaming (Direct Recording & Snapshots)
+			protected.POST("/cases/:id/recordings/direct", recordingHandler.UploadDirectRecording)
 			protected.POST("/cases/:id/recordings/start", recordingHandler.StartRecording)
 			protected.POST("/cases/:id/recordings/:recId/chunks", recordingHandler.UploadChunk)
 			protected.POST("/cases/:id/recordings/:recId/stop", recordingHandler.StopRecording)
-			protected.POST("/cases/:id/recordings/upload", recordingHandler.UploadFallbackRecording)
+			protected.POST("/cases/:id/recordings/upload", recordingHandler.UploadDirectRecording)
 			protected.POST("/cases/:id/screenshots", recordingHandler.UploadScreenshot)
 			protected.POST("/cases/:id/documents", recordingHandler.UploadDocument)
 			protected.GET("/files/stream", recordingHandler.GetFileStream)

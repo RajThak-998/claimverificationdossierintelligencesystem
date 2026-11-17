@@ -156,7 +156,7 @@ func (h *CaseHandler) ListCases(c *gin.Context) {
 		return
 	}
 
-	var responseItems []CaseResponseItem
+	responseItems := make([]CaseResponseItem, 0)
 	for _, cs := range cases {
 		insurerName := ""
 		if cs.Insurer != nil {

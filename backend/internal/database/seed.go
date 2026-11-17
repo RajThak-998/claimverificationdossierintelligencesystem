@@ -237,6 +237,94 @@ func SeedDatabase(db *gorm.DB) error {
 		},
 	})
 
+	// Evidentiary Documents for Case 1 (Palak Gupta - Work In Progress)
+	db.Create(&models.CaseDocument{
+		CaseID:        case1.ID,
+		UploadedByID:  agentPalak.ID,
+		DocCategory:   models.DocRC,
+		FileName:      "MH12AB1234_Registration_Certificate.pdf",
+		StoragePath:   "cases/case-hgv-101/documents/MH12AB1234_Registration_Certificate.pdf",
+		FileSizeBytes: 4250,
+		MimeType:      "application/pdf",
+		CreatedAt:     twoDaysAgo,
+	})
+	db.Create(&models.CaseDocument{
+		CaseID:        case1.ID,
+		UploadedByID:  agentPalak.ID,
+		DocCategory:   models.DocDL,
+		FileName:      "Sunil_Shinde_Commercial_Driving_License.pdf",
+		StoragePath:   "cases/case-hgv-101/documents/Sunil_Shinde_Commercial_Driving_License.pdf",
+		FileSizeBytes: 3980,
+		MimeType:      "application/pdf",
+		CreatedAt:     twoDaysAgo,
+	})
+	db.Create(&models.CaseDocument{
+		CaseID:        case1.ID,
+		UploadedByID:  agentPalak.ID,
+		DocCategory:   models.DocFIRGDCompromise,
+		FileName:      "Talegaon_Police_Station_GD_Memo.pdf",
+		StoragePath:   "cases/case-hgv-101/documents/Talegaon_Police_Station_GD_Memo.pdf",
+		FileSizeBytes: 4520,
+		MimeType:      "application/pdf",
+		CreatedAt:     twoDaysAgo,
+	})
+	db.Create(&models.CaseDocument{
+		CaseID:        case1.ID,
+		UploadedByID:  agentPalak.ID,
+		DocCategory:   models.DocCommercialPermit,
+		FileName:      "National_Goods_Permit_and_Fitness.pdf",
+		StoragePath:   "cases/case-hgv-101/documents/National_Goods_Permit_and_Fitness.pdf",
+		FileSizeBytes: 4120,
+		MimeType:      "application/pdf",
+		CreatedAt:     twoDaysAgo,
+	})
+	db.Create(&models.CaseDocument{
+		CaseID:        case1.ID,
+		UploadedByID:  agentPalak.ID,
+		DocCategory:   models.DocLoadChallanWeighbridge,
+		FileName:      "Talegaon_Weighbridge_Gross_Weight_Challan.pdf",
+		StoragePath:   "cases/case-hgv-101/documents/Talegaon_Weighbridge_Gross_Weight_Challan.pdf",
+		FileSizeBytes: 3840,
+		MimeType:      "application/pdf",
+		CreatedAt:     twoDaysAgo,
+	})
+	db.Create(&models.CaseDocument{
+		CaseID:        case1.ID,
+		UploadedByID:  agentPalak.ID,
+		DocCategory:   models.DocGarageEstimate,
+		FileName:      "Apex_Heavy_Motors_Repair_Estimate.pdf",
+		StoragePath:   "cases/case-hgv-101/documents/Apex_Heavy_Motors_Repair_Estimate.pdf",
+		FileSizeBytes: 4780,
+		MimeType:      "application/pdf",
+		CreatedAt:     yesterday,
+	})
+
+	// In-Call Live Screenshots for Case 1
+	db.Create(&models.CaseScreenshot{
+		CaseID:                 case1.ID,
+		UploadedByID:           agentPalak.ID,
+		StoragePath:            "cases/case-hgv-101/screenshots/odometer_and_chassis_punch.png",
+		TimestampOffsetSeconds: 135,
+		Caption:                "Odometer reading 142,890 km & chassis plate MAT448021N7M12345 inspected",
+		CreatedAt:              twoDaysAgo,
+	})
+	db.Create(&models.CaseScreenshot{
+		CaseID:                 case1.ID,
+		UploadedByID:           agentPalak.ID,
+		StoragePath:            "cases/case-hgv-101/screenshots/cabin_crush_and_steering_rod.png",
+		TimestampOffsetSeconds: 340,
+		Caption:                "Front left cabin impact & bent steering tie-rod assembly",
+		CreatedAt:              twoDaysAgo,
+	})
+	db.Create(&models.CaseScreenshot{
+		CaseID:                 case1.ID,
+		UploadedByID:           agentPalak.ID,
+		StoragePath:            "cases/case-hgv-101/screenshots/driver_face_and_badge.png",
+		TimestampOffsetSeconds: 490,
+		Caption:                "Driver Sunil Shinde holding commercial authorization badge B-992144",
+		CreatedAt:              twoDaysAgo,
+	})
+
 	// Case 2: UNASSIGNED LMV Case
 	case2 := models.Case{
 		ID:                     "case-lmv-202",

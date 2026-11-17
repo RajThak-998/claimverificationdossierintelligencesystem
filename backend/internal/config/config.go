@@ -3,7 +3,33 @@ package config
 import (
 	"os"
 	"strconv"
+	"strings"
 )
+
+func loadDotEnv() {
+	for _, envFile := range []string{".env", "../.env"} {
+		data, err := os.ReadFile(envFile)
+		if err != nil {
+			continue
+		}
+		lines := strings.Split(string(data), "\n")
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			parts := strings.SplitN(line, "=", 2)
+			if len(parts) == 2 {
+				k := strings.TrimSpace(parts[0])
+				v := strings.TrimSpace(parts[1])
+				v = strings.Trim(v, `"'`)
+				if os.Getenv(k) == "" {
+					os.Setenv(k, v)
+				}
+			}
+		}
+	}
+}
 
 type Config struct {
 	Port                     string
@@ -72,6 +98,7 @@ func getEnvFloat(key string, defaultVal float64) float64 {
 }
 
 func LoadConfig() *Config {
+	loadDotEnv()
 	return &Config{
 		Port:                    getEnv("PORT", "8080"),
 		AppEnv:                  getEnv("APP_ENV", "development"),
