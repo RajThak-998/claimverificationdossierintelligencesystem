@@ -17,9 +17,9 @@ This document provides a sequential, step-by-step engineering roadmap to develop
 ```mermaid
 flowchart TD
     P0["Phase 0: Tooling & Infra Scaffold<br/>(Docker, Go, MinIO, Vite)"] --> P1["Phase 1: DB, RBAC & Case Intake<br/>(PostgreSQL DDL, CSV Import, Grid)"]
-    P1 --> P2["Phase 2: WhatsApp & Media Stream<br/>(WebAudio, 5s Chunks, Snapshots)"]
+    P1 --> P2["Phase 2: WhatsApp & Media Stream<br/>(WebAudio, Buffer Flush, Snapshots)"]
     P2 --> P3["Phase 3: 7-Section Dossier & JSONB<br/>(10 Fields, Templates, Validation)"]
-    P3 --> P4["Phase 4: Worker Queue & FFmpeg<br/>(Asynq, Stitching, SHA-256, PDF)"]
+    P3 --> P4["Phase 4: Async Processing & PDF Engine<br/>(Goroutines, SHA-256, PDF, Ledger)"]
     P4 --> P5["Phase 5: QA Audit & Billing Ledger<br/>(Rework, Sign-Off, Invoicing)"]
     P5 --> P6["Phase 6: Staging SSL & Live Demo<br/>(Let's Encrypt, Seed Data, Client Demo)"]
 ```
@@ -34,25 +34,26 @@ Establish the developer environment, container network, and storage interface to
 ### Developer Tasks
 1. **Repository Layout**:
    ```
-   ├── backend/             # Go REST API & Worker
+   ├── backend/             # Go REST API & Workers
    │   ├── cmd/api/         # Main HTTP server entry
-   │   ├── cmd/worker/      # Asynq worker daemon entry
+   │   ├── cmd/worker/      # Optional Asynq worker daemon entry
    │   ├── internal/
    │   │   ├── auth/        # JWT middleware & RBAC
    │   │   ├── handlers/    # HTTP route controllers
    │   │   ├── models/      # GORM / SQL models
-   │   │   ├── queue/       # Redis Asynq tasks
+   │   │   ├── pdf/         # Dossier PDF generator
+   │   │   ├── worker/      # Stitcher & async jobs
    │   │   └── storage/     # StorageProvider interface
    ├── frontend/            # React / TypeScript / Vite / Tailwind
-   ├── docker-compose.yml   # Postgres, Redis, MinIO, API, Frontend
+   ├── docker-compose.yml   # Postgres, MinIO, API, Frontend, Nginx
    ├── nginx/               # Reverse proxy & SSL configs
    └── .env.example         # System configuration
    ```
 2. **Storage Interface Implementation**:
    * Implement the `StorageProvider` interface in Go (see [[11_The_6_Architectural_Pillars_and_Trap_Mitigations|Rule 1]]).
-   * Provide `MinIOStorageProvider` backed by MinIO S3 SDK.
+   * Provide `MinIOStorageProvider` backed by MinIO S3 SDK, with `LocalStorageProvider` fallback.
 3. **Container Bootstrap**:
-   * Run `docker compose up -d postgres redis minio` to verify local services are healthy.
+   * Run `docker compose up -d postgres minio` to verify local services are healthy.
 
 ---
 
@@ -76,24 +77,25 @@ Implement the database schema, user authentication, and the Cases Vault data gri
 
 ---
 
-## Phase 2: WhatsApp Integration & 5-Second MediaRecorder Pipeline (Day 6–8)
+## Phase 2: WhatsApp Integration & Direct MediaRecorder Pipeline (Day 6–8)
 
 ### Goals
-Build the in-browser tele-verification recording engine without browser crashes.
+Build the in-browser tele-verification recording engine with permanent floating widgets, buffer flushing, and direct uploads.
 
 ### Developer Tasks
 1. **WhatsApp Web Launcher**:
-   * Implement the `Chat & Record` trigger opening `https://web.whatsapp.com/send?phone=...`.
+   * Implement the `WhatsApp Call` / `Chat & Record` trigger opening `https://web.whatsapp.com/send?phone=...`.
 2. **Web Audio Mixer**:
    * Combine `getUserMedia` (microphone) and `getDisplayMedia` (tab audio) using Web Audio API (see [[06_Tele_Verification_and_Media_Recording_Pipeline]]).
    * Add warning banner if tab audio was not checked.
-3. **5-Second Chunk Streaming**:
-   * Configure `recorder.start(5000)`.
-   * Implement sequential chunk staging in frontend memory queue.
-   * Build backend endpoint: `POST /api/v1/cases/:id/recordings/:recId/chunks`.
-   * Store chunks via `StorageProvider.UploadFile()` to MinIO.
+3. **Direct Recording with Forced Buffer Flush**:
+   * Build independent floating pill widgets (`PermanentCallWidgets.tsx`) with pause/resume and timer.
+   * Continuous buffer collection via `recorder.start(500)`.
+   * Implement forced buffer flush via `recorder.requestData()` before stopping.
+   * Build backend endpoint: `POST /api/v1/cases/:id/recordings/direct` with on-the-fly SHA-256 calculation (`io.TeeReader`).
+   * Validate non-zero file sizes on client and server.
 4. **Live Call Snapshot Tool**:
-   * Implement canvas snapshot capture hotkey and upload to `/api/v1/cases/:id/screenshots`.
+   * Implement dual-pipeline canvas/ImageCapture snapshot capture and upload to `/api/v1/cases/:id/screenshots`.
 5. **Recall Timers & Contacts**:
    * Implement Sections 2 of Dossier Modal (contact directory & recall timers).
 
@@ -119,24 +121,21 @@ Implement the complete 7-Section Dossier Modal with dynamic JSONB validation.
 
 ---
 
-## Phase 4: Background Worker, FFmpeg Stitching & PDF Engine (Day 12–14)
+## Phase 4: Asynchronous Processing & Tamper-Evident PDF Engine (Day 12–14)
 
 ### Goals
-Decouple CPU-heavy tasks using Redis queue; build cryptographic PDF generator.
+Decouple CPU-heavy dossier generation using in-process Go goroutines; build cryptographic PDF generator.
 
 ### Developer Tasks
-1. **Asynq Worker Daemon**:
-   * Set up `hibiken/asynq` server with concurrency = 4 (see [[07_Background_Processing_and_Queue_Architecture]]).
-2. **FFmpeg Video Stitching**:
-   * Worker downloads 5-second chunks, writes `concat.txt`, executes `ffmpeg -c copy`.
-   * Calculates SHA-256 hash of final master file.
-   * Updates `recordings` table with checksum and `status = 'READY'`.
-3. **Tamper-Evident PDF Compiler**:
+1. **Asynchronous Goroutine Completer**:
+   * Set up asynchronous `asyncCompleter` function returning HTTP `202 Accepted` immediately upon Admin sign-off (see [[07_Background_Processing_and_Queue_Architecture]]).
+   * Implement context timeouts (`context.WithTimeout(ctx, 2*time.Minute)`).
+2. **Tamper-Evident PDF Compiler**:
    * Build HTML template embedding case metadata, call logs, 10 observation fields, and screenshots (see [[09_Tamper_Evident_PDF_and_Dossier_Generation]]).
-   * Embed SHA-256 hash and scannable verification QR code.
+   * Embed SHA-256 hash stamp and scannable verification QR code.
    * Render all timestamps in **IST (UTC+05:30)**.
-   * Compile via headless Chromium/Typst and save to MinIO.
-4. **Public Verification Page**:
+   * Implement JIT generation fallback when downloading compiled dossier.
+3. **Public Verification Page**:
    * Build `GET /api/v1/public/verify/dossier/:uuid` endpoint.
 
 ---
@@ -176,10 +175,10 @@ Deploy the system to a staging server with valid SSL/HTTPS to enable browser med
      * 5 `UNASSIGNED` (3 Heavy Vehicles, 2 LMV).
      * 5 `WORK_IN_PROGRESS` (with active recall timers and draft observations).
      * 3 `REVIEW` (ready for QA manager approval).
-     * 2 `COMPLETED` (with stitched video, SHA-256 hash, and downloadable PDF).
+     * 2 `COMPLETED` (with verified video, SHA-256 hash, and downloadable PDF).
 3. **Stakeholder Demo Walkthrough**:
    * Demonstrate bulk CSV intake.
-   * Launch WhatsApp tele-verification call with live 5s chunk streaming.
+   * Launch WhatsApp tele-verification call with permanent floating controls and direct video upload.
    * Take live video snapshots of vehicle damage.
    * Fill the 10 observation fields, select repudiation ground, and submit.
    * Log in as QA Manager, reject with note, rework as Agent, approve.

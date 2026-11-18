@@ -16,23 +16,23 @@ In real-world motor insurance investigations, field conditions are chaotic: inve
 ```mermaid
 flowchart TD
     subgraph Failures ["Real-World Failure Scenarios"]
-        F1["📶 Wi-Fi / 4G Network Drops Mid-Call"]
-        F2["💥 Browser Tab Crashes at Minute 45"]
+        F1["📶 Cellular / Wi-Fi Network Fluctuation Mid-Call"]
+        F2["💥 0-Byte Video / Premature Stop Encoding Trap"]
         F3["🔇 'Share System Audio' Box Unchecked"]
         F4["🚫 Microphone Permission Blocked"]
         F5["📞 Claimant Line Busy / Asks for Recall"]
-        F6["❌ QA Rejects Dossier for Missing DL"]
-        F7["⚡ Worker Process Killed during FFmpeg"]
+        F6["❌ QA Rejects Dossier for Deficiencies"]
+        F7["⚡ Background PDF Compilation Timeout"]
     end
 
     subgraph Strategies ["Built-in Resiliency Architecture"]
-        S1["IndexedDB Chunk Staging + Exponential Retry"]
-        S2["Session Recovery: Chunks Already on S3"]
+        S1["Local Client RAM Buffering & Offline Tolerance"]
+        S2["Forced Buffer Flush (requestData) + 0-Byte Rejection"]
         S3["WebAudio Track Sniffer & Warning Modal"]
         S4["Step-by-Step UI Reset Guide + Manual Upload Fallback"]
         S5["Recall Timer Scheduler + Agent Hub Alarms"]
         S6["Rework State Machine with Audit Delta Log"]
-        S7["Asynq Dead-Letter Queue & Ephemeral Cleanup"]
+        S7["Context Timeout + Just-In-Time (JIT) PDF Fallback"]
     end
 
     F1 --> S1
@@ -46,31 +46,30 @@ flowchart TD
 
 ---
 
-## 1. Failure Scenario 1: Wi-Fi / 4G Network Drop Mid-Call
+## 1. Failure Scenario 1: Cellular / Wi-Fi Network Fluctuation Mid-Call
 
 ### The Risk
-The investigator is 30 minutes into a tele-verification call with a truck driver on a highway. The investigator's mobile hotspot fluctuates or disconnects for 2 minutes.
+The investigator is 15 minutes into a tele-verification call with a truck driver on a highway. The investigator's mobile hotspot fluctuates or drops intermittently.
 
 ### The Mitigation
-* The browser `MediaRecorder` continues slicing 5-second chunks in memory.
-* Chunks are staged into an **IndexedDB** local queue on the investigator's machine.
-* The frontend network worker monitors `navigator.onLine` and HTTP response codes.
-* When the connection returns, staged chunks are pushed sequentially (`chunk_0142`, `chunk_0143`, `chunk_0144`) with exponential retry backoff.
-* The backend acknowledges each chunk by index, guaranteeing no chunk is lost or duplicated.
+* The browser's `MediaRecorder` runs **entirely client-side** in browser memory (`recordedChunksRef.current`). It does not depend on continuous server streaming.
+* Temporary network drops affect WhatsApp connectivity, but the browser recording engine continues capturing whatever is rendered and heard locally.
+* When the call concludes, the agent stops the recorder. If the agent's network is offline at that exact moment, the frontend retains the assembled video blob in memory and provides a retry prompt or the ability to save the WebM locally.
+* Because the platform dropped the 5-second chunking approach (which would have failed and fragmented on spotty networks), there are no dropped intermediate chunks or out-of-order stitching errors.
 
 ---
 
-## 2. Failure Scenario 2: Browser Tab Crash or Accidental Close
+## 2. Failure Scenario 2: 0-Byte WebM File / Accidental Stop
 
 ### The Risk
-The investigator accidentally closes Chrome or their laptop runs out of battery 40 minutes into a call.
+Eagerly invoking `recorder.stop()` without waiting for media codecs to finish encoding can cause the browser to generate an empty 0-byte WebM blob, resulting in lost evidence.
 
 ### The Mitigation
-* Because chunks were streamed every 5 seconds (see [[11_The_6_Architectural_Pillars_and_Trap_Mitigations|Rule 2]]), **all 480 chunks up to the crash already reside in object storage**.
-* When the investigator re-opens the dashboard, the system detects a recording in `STREAMING` status for that case.
-* The UI presents a prompt:
-  > *"An unclosed recording session (MOT18221241 - 40m 15s) was detected. Would you like to **Finalize & Save** or **Resume**?"*
-* Clicking **Finalize** marks the recording ready for stitching; the 40 minutes of evidence and billable duration are 100% saved.
+* **Forced Buffer Flush**: Before triggering stop, the frontend invokes `mediaRecorder.requestData()`. This forces the browser hardware encoder to flush all buffered video/audio frames into the accumulator.
+* **Stop Event Resolution**: The frontend wraps `recorder.onstop` inside a Promise, ensuring the final WebM blob is created only after all encoding events have resolved.
+* **Size Validation**: The frontend checks `fullBlob.size > 0`. If 0 bytes are detected, an error is surfaced immediately.
+* **Backend Guard**: The Go backend rejects empty files (`if fileHeader.Size == 0`) with `400 Bad Request`.
+* **Offline Recording Fallback**: If an agent experiences hardware issues or uses external recording software, they can use the **Upload Recording** fallback button (`POST /api/v1/cases/:id/recordings/upload`) to upload `.mp4`, `.webm`, or `.m4a` files.
 
 ---
 
@@ -135,16 +134,15 @@ A Manager reviews a dossier and notices the Driving License image is illegible o
 
 ---
 
-## 7. Failure Scenario 7: Worker Killed During Video Stitching
+## 7. Failure Scenario 7: Asynchronous Background Dossier Generation Timeout or Failure
 
 ### The Risk
-The server host is restarted or runs low on memory while FFmpeg is stitching a 2-hour recording.
+The server host is restarted, runs out of memory, or experiences a transient storage timeout while compiling the tamper-evident PDF dossier after Admin Sign-Off.
 
 ### The Mitigation
-* `hibiken/asynq` uses Redis task leases and automatic retries (`asynq.MaxRetry(3)`).
-* If the worker crashes mid-concatenation, the task lease expires and another worker instance picks up the job.
-* Workers use isolated scratch directories (`os.MkdirTemp`) with `defer os.RemoveAll()`, ensuring half-written temporary files never fill up the disk.
-* If all 3 retries fail, the task enters the **Dead Letter Queue (DLQ)** and alerts the Admin dashboard for manual inspection.
+* **Context Timeout Protection**: Asynchronous completer tasks run with strict `context.WithTimeout(ctx, 2*time.Minute)` to prevent stuck zombie goroutines.
+* **Just-In-Time (JIT) Generation Fallback**: When an Auditor, Manager, or Insurer attempts to download the dossier (`GET /api/v1/cases/:id/pdf/download`), the backend inspects `case.LockedPDFPath`. If the dossier was not yet generated (e.g., due to a temporary background interruption), the handler invokes `pdfGenerator.CompileDossier()` on-demand, generates the certified report synchronously, updates the database, and streams the dossier immediately.
+* **Multi-Node Deployment Resilience**: In optional multi-node deployments utilizing the `asynq` worker daemon, tasks use Redis leases with exponential backoff (`asynq.MaxRetry(3)`) and dead-letter queue (DLQ) alerts. Workers always execute temporary scratch directory cleanup via `defer os.RemoveAll(scratchDir)`.
 
 ---
 

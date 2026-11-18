@@ -122,8 +122,36 @@ Assigns or reassigns an investigator to a case.
 
 ## 4. Tele-Verification & Media Streaming Endpoints
 
-### `POST /api/v1/cases/:id/recordings/start`
-Initializes a new recording session before starting the WhatsApp Web stream.
+### `POST /api/v1/cases/:id/recordings/direct` (Primary Direct Recording Endpoint)
+Uploads a finalized in-browser WebM tele-verification recording in one shot with on-the-fly SHA-256 checksum computation and immediate readiness (see [[06_Tele_Verification_and_Media_Recording_Pipeline]]).
+* **Content-Type**: `multipart/form-data`
+* **Form Fields**:
+  * `recording_file`: WebM binary stream (guaranteed non-zero bytes via buffer flush).
+  * `duration_seconds`: Raw non-negative integer seconds (e.g. `1224`).
+* **Validation**:
+  * Rejects empty files (`0 bytes`) with `400 Bad Request`.
+* **Response (201 Created)**:
+  ```json
+  {
+    "id": "rec_7f8e9d0c-1234-5678-90ab-cdef12345678",
+    "case_id": "c1f8a3d2-0000-1111-2222-333344445555",
+    "agent_id": "usr_9988-...",
+    "status": "READY",
+    "duration_seconds": 1224,
+    "master_storage_path": "cases/c1f8a3d2-.../recordings/rec_1794901060.webm",
+    "sha256_checksum": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "file_size_bytes": 14298320,
+    "mime_type": "video/webm",
+    "started_at": "2026-10-19T13:39:36Z",
+    "stopped_at": "2026-10-19T14:00:00Z"
+  }
+  ```
+
+### `POST /api/v1/cases/:id/recordings/upload` (Offline Recording Fallback)
+Allows investigators to upload pre-recorded audio or video files captured via external equipment or phone backup (`.mp4`, `.webm`, `.m4a`, `.mp3`). Uses identical parsing and hashing logic as `direct`.
+
+### `POST /api/v1/cases/:id/recordings/start` (Legacy / Session Support)
+Initializes a new recording session tracking contact linkage before starting a stream.
 * **Request**:
   ```json
   {
@@ -139,8 +167,8 @@ Initializes a new recording session before starting the WhatsApp Web stream.
   }
   ```
 
-### `POST /api/v1/cases/:id/recordings/:recId/chunks`
-Streams sequential 5-second media slices from the browser (see [[06_Tele_Verification_and_Media_Recording_Pipeline]]).
+### `POST /api/v1/cases/:id/recordings/:recId/chunks` (Legacy / Backward-Compatibility)
+Retained for legacy 5-second chunk stream compatibility. Note: Direct upload via `/recordings/direct` is the standard production path.
 * **Content-Type**: `multipart/form-data`
 * **Form Fields**:
   * `chunk_index`: `0`, `1`, `2`, ...
@@ -154,8 +182,8 @@ Streams sequential 5-second media slices from the browser (see [[06_Tele_Verific
   }
   ```
 
-### `POST /api/v1/cases/:id/recordings/:recId/stop`
-Stops the recording session and calculates final session runtime.
+### `POST /api/v1/cases/:id/recordings/:recId/stop` (Legacy Stop)
+Marks a streaming session as stopped and ready.
 * **Request**:
   ```json
   {
@@ -166,7 +194,7 @@ Stops the recording session and calculates final session runtime.
   ```json
   {
     "recording_id": "rec_7f8e9d0c-...",
-    "status": "READY_FOR_STITCHING",
+    "status": "READY",
     "duration_seconds": 1224
   }
   ```
@@ -231,8 +259,8 @@ Admin validates total duration, applies financial sign-off, and transitions case
   ```json
   {
     "status": "ACCEPTED",
-    "message": "Case completed; video stitching and PDF compilation enqueued",
-    "job_id": "asynq_job_998877"
+    "message": "Admin sign-off complete; PDF dossier compilation dispatched",
+    "case_id": "c1f8a3d2-..."
   }
   ```
 

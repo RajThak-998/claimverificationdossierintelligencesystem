@@ -24,7 +24,7 @@ erDiagram
     CASES ||--o{ CASE_CONTACTS : "has registered"
     CASES ||--o{ CALL_LOGS : "logs attempts"
     CASES ||--o{ RECORDINGS : "contains"
-    RECORDINGS ||--o{ RECORDING_CHUNKS : "streams 5s slices"
+    RECORDINGS ||--o{ RECORDING_CHUNKS : "legacy chunks (optional)"
     CASES ||--o{ CASE_DOCUMENTS : "stores evidence"
     CASES ||--o{ CASE_SCREENSHOTS : "stores snapshots"
     CASES ||--|| CASE_OBSERVATIONS : "records findings"
@@ -215,7 +215,7 @@ CREATE TABLE call_logs (
 CREATE INDEX idx_call_logs_recall ON call_logs(agent_id, recall_at) WHERE recall_at IS NOT NULL;
 
 -- ============================================================================
--- 4. In-Browser Media Recordings & 5-Second Chunks
+-- 4. In-Browser Media Recordings & Direct Upload Vault
 -- ============================================================================
 CREATE TYPE recording_status AS ENUM ('STREAMING', 'PROCESSING', 'READY', 'FAILED');
 
@@ -224,10 +224,10 @@ CREATE TABLE recordings (
     case_id UUID NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
     agent_id UUID NOT NULL REFERENCES users(id),
     contact_id UUID REFERENCES case_contacts(id),
-    status recording_status NOT NULL DEFAULT 'STREAMING',
+    status recording_status NOT NULL DEFAULT 'READY',
     duration_seconds INT NOT NULL DEFAULT 0,
     master_storage_path VARCHAR(512), -- Storage key in MinIO/S3, NOT /uploads/!
-    sha256_checksum VARCHAR(64),     -- Calculated post-concatenation
+    sha256_checksum VARCHAR(64),     -- Computed on-the-fly during upload
     file_size_bytes BIGINT NOT NULL DEFAULT 0,
     mime_type VARCHAR(64) NOT NULL DEFAULT 'video/webm',
     started_at TIMESTAMPTZ NOT NULL,
@@ -235,7 +235,8 @@ CREATE TABLE recordings (
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
--- Stores sequential 5-second slices uploaded from the browser
+-- Note: The active architecture uses direct upload with buffer flushing (DEC-023).
+-- The recording_chunks table is retained for backwards compatibility schema support.
 CREATE TABLE recording_chunks (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     recording_id UUID NOT NULL REFERENCES recordings(id) ON DELETE CASCADE,
@@ -347,14 +348,14 @@ CREATE TABLE billing_ledger (
 
 ## 3. Critical Architecture Alignments in Schema
 
-1. **Storage Paths (`storage_path`, `master_storage_path`)**: Notice these columns store relative object keys (e.g., `cases/MOT18221241/chunks/chunk_0.webm`), **never** absolute server paths like `/var/uploads/chunk_0.webm`. See [[11_The_6_Architectural_Pillars_and_Trap_Mitigations|Rule 1]].
-2. **Raw Duration Storage (`duration_seconds`, `recording_duration_seconds`)**: Saved as pure non-negative integers. No floating point rounding bugs or time string conversions occur inside the database.
+1. **Storage Paths (`master_storage_path`, `storage_path`)**: Notice these columns store relative object keys (e.g., `cases/case-hgv-101/recordings/rec_1794898310.webm`), **never** absolute server paths like `/var/uploads/rec.webm`. See [[11_The_6_Architectural_Pillars_and_Trap_Mitigations|Rule 1]].
+2. **Raw Duration Storage (`duration_seconds`, `total_duration_seconds`)**: Saved as pure non-negative integers. No floating point rounding bugs or time string conversions occur inside the database.
 3. **UTC Timestamps (`TIMESTAMPTZ`)**: All event times are recorded in coordinated universal time. Presentation in IST (`UTC+05:30`) occurs purely at the UI/PDF boundary. See [[11_The_6_Architectural_Pillars_and_Trap_Mitigations|Rule 6]].
 
 ---
 
 ## 4. Next Steps & Connected Knowledge
 
-* To see how the browser streams into `recording_chunks`, read [[06_Tele_Verification_and_Media_Recording_Pipeline]].
-* To see how background workers query `recording_chunks` to assemble master files, read [[07_Background_Processing_and_Queue_Architecture]].
+* To see how direct recordings and live snapshots are captured and uploaded, read [[06_Tele_Verification_and_Media_Recording_Pipeline]].
+* To see how background processing and PDF generation are executed, read [[07_Background_Processing_and_Queue_Architecture]].
 * To explore the JSON structure stored in `case_observations`, read [[08_Dossier_Observation_Engine_and_Dynamic_Templates]].

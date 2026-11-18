@@ -25,15 +25,17 @@ flowchart TD
     
     subgraph InternalNetwork ["Docker Internal Network (bridge: motor_net)"]
         NGINX -->|HTTP:3000| FRONTEND["Frontend Container (React / Vite / Nginx)"]
-        NGINX -->|HTTP:8080| BACKEND["Go API Container (Stateless REST)"]
+        NGINX -->|HTTP:8080| BACKEND["Go API Container<br/>(Direct Upload & In-Memory Goroutines)"]
         
         BACKEND --> PG[("PostgreSQL 16 (Port 5432)")]
-        BACKEND --> REDIS[("Redis 7.2 (Port 6379)")]
-        BACKEND --> MINIO[("MinIO S3 Object Storage (Port 9000)")]
+        BACKEND --> MINIO[("MinIO S3 / Local Storage (Port 9000)")]
         
-        REDIS --> WORKER["Go Background Worker Daemon<br/>(FFmpeg + Headless PDF Engine)"]
-        WORKER --> PG
-        WORKER --> MINIO
+        subgraph OptionalScale ["Optional Multi-Node Scale-Out"]
+            BACKEND -.-> REDIS[("Redis 7.2 (Port 6379)")]
+            REDIS -.-> WORKER["Go Background Worker Daemon<br/>(Asynq Worker)"]
+            WORKER -.-> PG
+            WORKER -.-> MINIO
+        end
     end
 ```
 
@@ -44,7 +46,10 @@ flowchart TD
 
 ## 2. Production Docker Compose Setup (`docker-compose.yml`)
 
-The entire platform—including the database, Redis queue, MinIO S3 object storage, Go API, worker, frontend, and Nginx proxy—can be launched with a single command: `docker compose up -d`.
+The platform—including PostgreSQL, MinIO S3 object storage, the stateless Go API (with in-memory async execution), the React frontend, and Nginx reverse proxy—launches cleanly with: `docker compose up -d`.
+
+> [!NOTE]
+> **Lean Deployment for ~100 Agents**: Because 5-second chunk streaming and active Redis chunk recovery were dropped in favor of direct uploads and in-process Go goroutines for PDF compilation, running a standalone Redis container and separate worker container is completely optional.
 
 ```yaml
 version: '3.8'
@@ -55,10 +60,7 @@ networks:
 
 volumes:
   pg_data:
-  redis_data:
   minio_data:
-  certbot_etc:
-  certbot_var:
 
 services:
   # ============================================================================
@@ -68,6 +70,8 @@ services:
     image: postgres:16-alpine
     container_name: motor_postgres
     restart: always
+    ports:
+      - "5433:5432"
     environment:
       POSTGRES_DB: ${DB_NAME:-motor_claims}
       POSTGRES_USER: ${DB_USER:-postgres}
@@ -83,30 +87,17 @@ services:
       retries: 5
 
   # ============================================================================
-  # 2. Redis Message Broker & Queue
-  # ============================================================================
-  redis:
-    image: redis:7-alpine
-    container_name: motor_redis
-    restart: always
-    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-SecretRedisPass123!}
-    volumes:
-      - redis_data:/data
-    networks:
-      - motor_net
-    healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-SecretRedisPass123!}", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
-  # ============================================================================
-  # 3. Object Storage (MinIO S3 Compatible)
+  # 2. Object Storage (MinIO S3 Compatible)
   # ============================================================================
   minio:
-    image: minio/minio:RELEASE.2024-05-10T01-41-38Z
+    image: quay.io/minio/minio:latest
+    profiles:
+      - minio
     container_name: motor_minio
     restart: always
+    ports:
+      - "9000:9000"
+      - "9001:9001"
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${STORAGE_ACCESS_KEY:-minioadmin}
@@ -117,7 +108,7 @@ services:
       - motor_net
 
   # ============================================================================
-  # 4. Stateless Go Backend REST API
+  # 3. Stateless Go Backend REST API (Direct Upload & In-Memory Goroutine Workers)
   # ============================================================================
   api:
     build:
@@ -125,56 +116,27 @@ services:
       dockerfile: Dockerfile.api
     container_name: motor_api
     restart: always
+    ports:
+      - "8080:8080"
     environment:
       - PORT=8080
+      - DB_DRIVER=postgres
       - DB_DSN=postgres://${DB_USER:-postgres}:${DB_PASSWORD:-SecretPostgresPass123!}@postgres:5432/${DB_NAME:-motor_claims}?sslmode=disable
-      - REDIS_ADDR=redis:6379
-      - REDIS_PASSWORD=${REDIS_PASSWORD:-SecretRedisPass123!}
-      - STORAGE_DRIVER=${STORAGE_DRIVER:-minio}
-      - STORAGE_ENDPOINT=minio:9000
-      - STORAGE_BUCKET=${STORAGE_BUCKET:-motor-claims-vault}
-      - STORAGE_ACCESS_KEY=${STORAGE_ACCESS_KEY:-minioadmin}
-      - STORAGE_SECRET_KEY=${STORAGE_SECRET_KEY:-minioadminpassword123}
-      - STORAGE_USE_SSL=false
+      - STORAGE_DRIVER=local
+      - STORAGE_BASE_DIR=data/storage
+      - STORAGE_BASE_URL=http://localhost:8080
       - JWT_SECRET=${JWT_SECRET:-super-secret-jwt-signing-key-32chars}
       - APP_ENV=production
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
-        condition: service_healthy
+    volumes:
+      - ./data/storage:/app/data/storage
     networks:
       - motor_net
 
   # ============================================================================
-  # 5. Go Background Worker (FFmpeg & PDF Compiler)
-  # ============================================================================
-  worker:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile.worker
-    container_name: motor_worker
-    restart: always
-    environment:
-      - DB_DSN=postgres://${DB_USER:-postgres}:${DB_PASSWORD:-SecretPostgresPass123!}@postgres:5432/${DB_NAME:-motor_claims}?sslmode=disable
-      - REDIS_ADDR=redis:6379
-      - REDIS_PASSWORD=${REDIS_PASSWORD:-SecretRedisPass123!}
-      - STORAGE_DRIVER=${STORAGE_DRIVER:-minio}
-      - STORAGE_ENDPOINT=minio:9000
-      - STORAGE_BUCKET=${STORAGE_BUCKET:-motor-claims-vault}
-      - STORAGE_ACCESS_KEY=${STORAGE_ACCESS_KEY:-minioadmin}
-      - STORAGE_SECRET_KEY=${STORAGE_SECRET_KEY:-minioadminpassword123}
-      - STORAGE_USE_SSL=false
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    networks:
-      - motor_net
-
-  # ============================================================================
-  # 6. Frontend Dashboard (React / Vite)
+  # 4. Frontend Dashboard (React / Vite)
   # ============================================================================
   frontend:
     build:
@@ -186,7 +148,7 @@ services:
       - motor_net
 
   # ============================================================================
-  # 7. Reverse Proxy & SSL (Nginx + Certbot)
+  # 5. Reverse Proxy & SSL (Nginx)
   # ============================================================================
   nginx:
     image: nginx:alpine
@@ -194,11 +156,8 @@ services:
     restart: always
     ports:
       - "80:80"
-      - "443:443"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - certbot_etc:/etc/letsencrypt:ro
-      - certbot_var:/var/www/certbot:ro
     depends_on:
       - frontend
       - api
@@ -210,7 +169,7 @@ services:
 
 ## 3. Production Nginx Configuration (`nginx.conf`)
 
-This configuration enforces SSL/TLS 1.3, handles chunked multipart streaming uploads up to 50MB, provides WebSocket proxying for live recall alarms, and isolates API from frontend assets:
+This configuration enforces SSL/TLS 1.3, handles multipart video uploads up to 50MB, provides WebSocket proxying for live recall alarms, and isolates API from frontend assets:
 
 ```nginx
 events {
@@ -223,7 +182,7 @@ http {
     
     sendfile on;
     keepalive_timeout 65;
-    client_max_body_size 50M; # Necessary for 5s video chunks and large PDF uploads
+    client_max_body_size 50M; # Necessary for direct video uploads and large PDF dossiers
 
     # Redirect all HTTP traffic to HTTPS
     server {

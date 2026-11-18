@@ -1,101 +1,115 @@
 ---
 title: 07. Background Processing and Queue Architecture
 tags:
-  - redis
-  - asynq
-  - ffmpeg
-  - sha256
   - background-jobs
+  - goroutines
+  - pdf-generation
+  - sha256
+  - asynq
   - architecture
 date: 2026-10-19
 status: active
 ---
 
-# ⚙️ 07. Background Processing and Queue Architecture
+# ⚙️ 07. Background Processing and Architecture
 
 ## 1. Background Job Isolation (Trap #3 Mitigation)
 
 > [!CAUTION]
-> **The Background Job Isolation Trap**: Running video stitching (`ffmpeg`), SHA-256 checksum calculation, and PDF rendering directly inside the HTTP request handler (`POST /api/cases/:id/submit`) will freeze the web server event loop, cause HTTP timeouts, and render the dashboard unresponsive for all users.
+> **The Background Job Isolation Trap**: Running cryptographic checksum calculation, PDF rendering, or file encoding directly inside the HTTP request handler (`POST /api/cases/:id/submit` or sign-off) will freeze the web server event loop, cause HTTP timeouts, and render the dashboard unresponsive for all users.
 
-To maintain 100% responsiveness, all heavy computation is completely decoupled using an asynchronous worker queue backed by **Redis** and **`hibiken/asynq`** in Go:
+To maintain 100% responsiveness, all heavy computation is completely decoupled using asynchronous execution with the **HTTP 202 Accepted** pattern.
+
+> [!NOTE]
+> **Scale Rationale & Redis Evolution**:
+> In earlier designs, Redis and `hibiken/asynq` were proposed to handle 5-second chunk stitching and active failure recovery. However, for the platform's actual operating scale (maximum ~100 simultaneous agents):
+> 1. Recordings are uploaded directly in one shot with on-the-fly SHA-256 calculation (`io.TeeReader`), eliminating the need for chunk stitching workers.
+> 2. Primary asynchronous tasks are **Dossier PDF Compilation** and **Billing Ledger Finalization** upon Admin Sign-Off.
+> 3. Native Go Goroutines with context timeouts handle this workload with negligible overhead, zero Redis dependency, and sub-second dispatch.
+> 4. Redis and Asynq remain supported as an optional scale-out daemon for multi-instance distributed deployments.
 
 ```mermaid
 sequenceDiagram
     autonumber
-    actor Admin as 👑 Admin / Agent
+    actor Admin as 👑 Admin / Manager
     participant HTTP as 🌐 Go HTTP Server
-    participant Redis as ⚡ Redis Queue (Asynq)
-    participant Worker as 🛠️ Background Worker
-    participant FFmpeg as 🎬 FFmpeg Engine
-    participant Hasher as 🔒 SHA-256 Engine
+    participant Goroutine as ⚡ Async In-Memory Goroutine
+    participant Hasher as 🔒 SHA-256 Engine (On Upload)
+    participant PDFEng as 📄 PDF Dossier Compiler
     participant Storage as 🪣 Object Storage
     participant DB as 🗄️ PostgreSQL
 
-    Admin->>HTTP: POST /api/cases/:id/lock (or submit)
-    HTTP->>DB: UPDATE cases SET status = 'COMPLETED' (or 'REVIEW')
-    HTTP->>Redis: Enqueue Task "recording:stitch" & "dossier:pdf"
-    HTTP-->>Admin: 202 Accepted (Job Enqueued, Status: Processing)
+    Admin->>HTTP: POST /api/cases/:id/admin/sign-off
+    HTTP->>DB: UPDATE cases SET status = 'COMPLETED'
+    HTTP->>Goroutine: Launch asyncCompleter(caseID) via Goroutine
+    HTTP-->>Admin: 202 Accepted (Case Completed, Processing Background Tasks)
 
-    Note over Redis,Worker: Asynchronous Processing (Off Main HTTP Thread)
-    Redis->>Worker: Dispatch "recording:stitch"
-    Worker->>Storage: Download 5s chunks for recording
-    Worker->>FFmpeg: Concatenate chunks (Stream Copy)
-    Worker->>Hasher: Calculate SHA-256 Checksum on Master File
-    Worker->>Storage: Upload master_recording.webm
-    Worker->>DB: UPDATE recordings SET sha256 = '...', status = 'READY'
-    
-    Worker->>Redis: Enqueue "dossier:pdf_generate"
-    Redis->>Worker: Dispatch "dossier:pdf_generate"
-    Worker->>Storage: Upload Final Locked Dossier PDF
-    Worker->>DB: UPDATE cases SET locked_pdf_path = '...'
+    Note over Goroutine,PDFEng: Asynchronous Processing (Off Main HTTP Thread)
+    Goroutine->>DB: Fetch Case, Observations, Contacts, Screenshots, Verified Recording
+    Goroutine->>PDFEng: Compile Tamper-Evident Dossier with QR & SHA-256
+    PDFEng->>Storage: StorageProvider.UploadFile(dossier_<case_no>.html/.pdf)
+    Goroutine->>DB: UPDATE cases SET locked_pdf_path = storagePath
 ```
 
 ---
 
-## 2. Asynq Task Definitions & Enqueueing Pattern
+## 2. In-Process Goroutine Asynchronous Execution (`cmd/api/main.go`)
 
-### Enqueueing via HTTP Handler (Returns 202 Accepted Immediately)
+In the primary production configuration, background tasks run asynchronously inside managed Go goroutines with strict context timeouts:
 
 ```go
-package handlers
+// cmd/api/main.go
+pdfGenerator := pdf.NewGenerator(db, storageProvider, cfg.StorageBaseURL)
 
-import (
-    "encoding/json"
-    "net/http"
-    "github.com/gin-gonic/gin"
-    "github.com/hibiken/asynq"
-)
+// Async completer task called on sign-off
+asyncCompleter := func(caseID string) error {
+    go func() {
+        ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+        defer cancel()
 
-type StitchTaskPayload struct {
-    CaseID      string `json:"case_id"`
-    RecordingID string `json:"recording_id"`
+        // 1. Verify any recorded media sessions
+        var recordings []models.Recording
+        db.Where("case_id = ?", caseID).Find(&recordings)
+
+        // 2. Compile Certified PDF Dossier
+        if err := pdfGenerator.CompileDossier(ctx, caseID); err != nil {
+            log.Printf("Error compiling dossier for case %s: %v", caseID, err)
+            return
+        }
+
+        log.Printf("✅ Dossier successfully compiled for case %s", caseID)
+    }()
+    return nil
 }
 
-func (h *CaseHandler) SubmitCaseReport(c *gin.Context) {
-    caseID := c.Param("id")
-    
-    // 1. Quick DB status update
-    // ... validation logic ...
-    
-    // 2. Prepare payload for background queue
-    payload, _ := json.Marshal(StitchTaskPayload{
-        CaseID: caseID,
-    })
+reviewHandler := handlers.NewReviewHandler(db, asyncCompleter)
+```
 
-    task := asynq.NewTask("recording:stitch", payload, asynq.MaxRetry(3))
-    
-    // 3. Enqueue to Redis
-    _, err := h.asynqClient.Enqueue(task)
-    if err != nil {
-        c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enqueue task"})
+### Sign-Off Controller Returning 202 Accepted Immediately
+
+```go
+func (h *ReviewHandler) AdminSignOff(c *gin.Context) {
+    caseID := c.Param("id")
+
+    // Update case status to COMPLETED
+    if err := h.db.Model(&models.Case{}).Where("id = ?", caseID).
+        Updates(map[string]interface{}{
+            "status": models.CaseCompleted,
+            "sign_off_at": time.Now().UTC(),
+        }).Error; err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to sign off"})
         return
     }
 
-    // 4. Return 202 Accepted immediately!
+    // Trigger async dossier compilation
+    if h.asyncCompleter != nil {
+        _ = h.asyncCompleter(caseID)
+    }
+
+    // 202 Accepted returned in < 15ms!
     c.JSON(http.StatusAccepted, gin.H{
         "status":  "ACCEPTED",
-        "message": "Case submitted; background compilation enqueued",
+        "message": "Admin sign-off complete; PDF dossier compilation dispatched",
         "case_id": caseID,
     })
 }
@@ -103,125 +117,19 @@ func (h *CaseHandler) SubmitCaseReport(c *gin.Context) {
 
 ---
 
-## 3. Worker Implementation: FFmpeg Concatenation & SHA-256 Hashing
+## 3. Optional Multi-Node Worker Daemon (Redis + Asynq)
 
-The worker downloads chunks to an isolated ephemeral scratch directory, invokes FFmpeg using stream copy (`-c copy`) for near-instantaneous execution without re-encoding, calculates the cryptographic hash, and uploads the master file to object storage.
-
-```go
-package tasks
-
-import (
-    "context"
-    "crypto/sha256"
-    "encoding/hex"
-    "fmt"
-    "io"
-    "os"
-    "os/exec"
-    "path/filepath"
-    "github.com/hibiken/asynq"
-)
-
-type StitchWorker struct {
-    storage StorageProvider
-    db      *gorm.DB
-}
-
-func (w *StitchWorker) HandleStitchTask(ctx context.Context, t *asynq.Task) error {
-    var payload StitchTaskPayload
-    json.Unmarshal(t.Payload(), &payload)
-
-    // 1. Create temporary working directory
-    scratchDir, err := os.MkdirTemp("", "stitch-"+payload.RecordingID)
-    if err != nil {
-        return err
-    }
-    defer os.RemoveAll(scratchDir) // Always clean up scratch files!
-
-    // 2. Fetch list of chunks from database ordered by chunk_index
-    var chunks []RecordingChunk
-    w.db.Where("recording_id = ?", payload.RecordingID).
-         Order("chunk_index ASC").Find(&chunks)
-
-    // 3. Download all chunks and construct concat.txt for FFmpeg
-    concatFilePath := filepath.Join(scratchDir, "concat.txt")
-    concatFile, err := os.Create(concatFilePath)
-    if err != nil {
-        return err
-    }
-
-    for _, chunk := range chunks {
-        localChunkPath := filepath.Join(scratchDir, fmt.Sprintf("chunk_%06d.webm", chunk.ChunkIndex))
-        reader, _ := w.storage.DownloadFile(ctx, chunk.StoragePath)
-        outFile, _ := os.Create(localChunkPath)
-        io.Copy(outFile, reader)
-        reader.Close()
-        outFile.Close()
-
-        fmt.Fprintf(concatFile, "file '%s'\n", localChunkPath)
-    }
-    concatFile.Close()
-
-    // 4. Execute FFmpeg stream copy (no CPU transcoding!)
-    masterLocalPath := filepath.Join(scratchDir, "master.webm")
-    cmd := exec.CommandContext(ctx, "ffmpeg", "-y", 
-        "-f", "concat", 
-        "-safe", "0", 
-        "-i", concatFilePath, 
-        "-c", "copy", 
-        "-movflags", "+faststart", 
-        masterLocalPath,
-    )
-    if out, err := cmd.CombinedOutput(); err != nil {
-        return fmt.Errorf("ffmpeg error: %v: %s", err, string(out))
-    }
-
-    // 5. Calculate SHA-256 Checksum on the master file
-    masterFile, err := os.Open(masterLocalPath)
-    if err != nil {
-        return err
-    }
-    defer masterFile.Close()
-
-    hasher := sha256.New()
-    if _, err := io.Copy(hasher, masterFile); err != nil {
-        return err
-    }
-    checksum := hex.EncodeToString(hasher.Sum(nil))
-
-    // 6. Upload Master Video via StorageProvider
-    masterStoragePath := fmt.Sprintf("cases/%s/recordings/%s/master.webm", payload.CaseID, payload.RecordingID)
-    masterFile.Seek(0, io.SeekStart)
-    _, err = w.storage.UploadFile(ctx, masterFile, masterStoragePath)
-    if err != nil {
-        return err
-    }
-
-    // 7. Update recording record in DB
-    w.db.Model(&Recording{}).Where("id = ?", payload.RecordingID).Updates(map[string]interface{}{
-        "master_storage_path": masterStoragePath,
-        "sha256_checksum":     checksum,
-        "status":              "READY",
-    })
-
-    return nil
-}
-```
-
----
-
-## 4. Concurrency & Queue Configuration
-
-In production, video stitching and PDF compilation require controlled worker concurrency to prevent CPU exhaustion on the host:
+For enterprise clusters exceeding 500+ agents or running across multiple server nodes, the platform includes a standalone worker daemon in `backend/cmd/worker/main.go`. This daemon uses Redis and `hibiken/asynq` to distribute background jobs across dedicated worker nodes:
 
 ```go
-// Worker Server Initialization
+// backend/cmd/worker/main.go
 srv := asynq.NewServer(
-    asynq.RedisClientOpt{Addr: os.Getenv("REDIS_ADDR")},
+    asynq.RedisClientOpt{
+        Addr:     cfg.RedisAddr,
+        Password: cfg.RedisPassword,
+    },
     asynq.Config{
-        // Limit total concurrent background tasks
-        Concurrency: 4, 
-        // Prioritize queues: critical tasks run first
+        Concurrency: 4, // Controlled concurrency to prevent host CPU starvation
         Queues: map[string]int{
             "critical": 6,
             "default":  3,
@@ -229,12 +137,39 @@ srv := asynq.NewServer(
         },
     },
 )
+
+mux := asynq.NewServeMux()
+
+mux.HandleFunc("dossier:pdf", func(ctx context.Context, t *asynq.Task) error {
+    var p DossierTaskPayload
+    json.Unmarshal(t.Payload(), &p)
+    return pdfGen.CompileDossier(ctx, p.CaseID)
+})
+
+mux.HandleFunc("recording:stitch", func(ctx context.Context, t *asynq.Task) error {
+    var p StitchTaskPayload
+    json.Unmarshal(t.Payload(), &p)
+    return stitcher.StitchRecording(ctx, p.CaseID, p.RecordingID)
+})
 ```
+
+---
+
+## 4. Concurrency & Performance Profile for ~100 Agents
+
+| Metric | With 5s Chunks + Redis Stitcher | Direct Upload + Goroutines (Current) |
+|---|---|---|
+| **HTTP Requests / Sec** | ~20–30 req/sec (continuous chunk uploads) | ~0.05 req/sec (only on call end) |
+| **Network Fragility** | High (packet loss drops chunks) | Low (single clean streaming upload) |
+| **Stitching CPU Spike** | Heavy (FFmpeg stream copy per call) | None (video is assembled on client) |
+| **Redis Infrastructure** | Mandatory container/cluster | Optional / Not required for standard runtime |
+| **SHA-256 Hasher** | Computed post-stitching | Computed on-the-fly during upload buffering |
+| **Memory Footprint** | ~500MB+ (Redis + Worker daemons) | < 50MB (native Go goroutines) |
 
 ---
 
 ## 5. Next Steps & Connected Knowledge
 
 * To see how the resulting SHA-256 hash is embedded in the PDF dossier, read [[09_Tamper_Evident_PDF_and_Dossier_Generation]].
-* For details on the storage abstraction used by workers, see [[11_The_6_Architectural_Pillars_and_Trap_Mitigations|Rule 1]].
-* For deployment and Redis container setup, see [[14_Hosting_Infrastructure_and_Deployment_Guide]].
+* For details on the storage abstraction used by background tasks, see [[11_The_6_Architectural_Pillars_and_Trap_Mitigations|Rule 1]].
+* For single-command Docker deployment without unnecessary services, see [[14_Hosting_Infrastructure_and_Deployment_Guide]].

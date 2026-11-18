@@ -45,8 +45,8 @@ flowchart LR
 ```
 
 ### Key Capabilities
-* **In-Browser Screen & Audio Tele-Verification**: Initiates a WhatsApp Web session directly while recording the agent's screen and call audio in 5-second resilient chunks without requiring desktop third-party software.
-* **Tamper-Evident Evidence Vault**: Generates cryptographic SHA-256 hashes of all concatenated audio/video recordings and embeds them into locked PDF dossiers.
+* **In-Browser Screen & Audio Tele-Verification**: Initiates a WhatsApp Web session directly while recording the agent's screen and call audio with permanent moveable floating controls and guaranteed non-zero buffer flush, without requiring desktop third-party software.
+* **Tamper-Evident Evidence Vault**: Generates cryptographic SHA-256 hashes of all verified audio/video recordings on-the-fly and embeds them into locked PDF dossiers.
 * **Dynamic Vehicle-Class Observations**: Uses PostgreSQL JSONB to support distinct observation requirements for Commercial Heavy Vehicles (permits, weighbridge slips) and Light Motor Vehicles.
 * **Per-Minute Accurate Commercial Ledger**: Stores call runtimes down to the exact second in UTC, converting to billable minutes automatically to eliminate client billing disputes.
 
@@ -54,13 +54,13 @@ flowchart LR
 
 ## 3. High-Level System Architecture
 
-The platform follows a modern, decoupled, cloud-ready architecture:
+The platform follows a modern, decoupled, cloud-ready architecture optimized for high investigator productivity (~100 concurrent agents):
 
 ```mermaid
 flowchart TD
     subgraph ClientLayer ["Client Presentation Layer (Browser)"]
         UI["Modern Web Dashboard (React / TypeScript)"]
-        REC["MediaRecorder Engine (5s Chunks Streaming)"]
+        REC["MediaRecorder Engine (Moveable Controls & Buffer Flush)"]
         WA["WhatsApp Web Integration (Deep Links)"]
     end
 
@@ -69,21 +69,18 @@ flowchart TD
     end
 
     subgraph AppLayer ["Stateless Backend Layer"]
-        GO["Go HTTP Server (Stateless REST API / Gin or Echo)"]
+        GO["Go HTTP Server (Stateless REST API / Gin)"]
         AUTH["JWT Auth & RBAC Middleware"]
+        GOROUTINE["In-Memory Async Goroutines (PDF Compilation & Verification)"]
     end
 
-    subgraph AsyncLayer ["Asynchronous Job Queue"]
-        REDIS[("Redis Key-Value & Queue")]
-        WORKER["Go Background Worker (hibiken/asynq)"]
-        FFMPEG["FFmpeg Binary (Stitching & Audio Normalization)"]
-        HASHER["SHA-256 Hashing Engine"]
-        PDFENG["Headless PDF Compiler (Chromium / Typst)"]
+    subgraph OptionalWorkerLayer ["Optional Scaled Worker Queue"]
+        WORKER["Go Worker Daemon (hibiken/asynq - Optional)"]
     end
 
     subgraph DataStorageLayer ["Data & Storage Layer"]
         PG[("PostgreSQL 16 (JSONB & TIMESTAMPTZ)")]
-        STORAGE["StorageProvider Interface (MinIO / S3 / R2)"]
+        STORAGE["StorageProvider Interface (MinIO / S3 / Local)"]
     end
 
     UI --> NGINX
@@ -91,14 +88,15 @@ flowchart TD
     NGINX --> GO
     GO --> AUTH
     AUTH --> PG
-    GO --> REDIS
-    REDIS --> WORKER
-    WORKER --> FFMPEG
-    WORKER --> HASHER
-    WORKER --> PDFENG
-    WORKER --> STORAGE
+    GO --> GOROUTINE
+    GOROUTINE --> STORAGE
+    GOROUTINE --> PG
+    GO -.-> WORKER
     GO --> STORAGE
 ```
+
+> [!NOTE]
+> **Architecture Scaling Rationale**: The initial design explored 5-second chunk streaming and active Redis chunk recovery. However, given the platform's realistic operational scale (~100 simultaneous agents), 5-second chunking introduced excessive HTTP request overhead (20 req/sec across agents), file fragmentation, and unnecessary FFmpeg stitching complexity. The production platform uses continuous in-memory slice buffering with forced `requestData()` buffer flushing, direct upload (`POST /cases/:id/recordings/direct`), on-the-fly SHA-256 calculation, and in-process Go goroutines for PDF compilation.
 
 ---
 
@@ -107,8 +105,8 @@ flowchart TD
 To ensure production stability, the platform enforces 6 foundational principles from Day 1 (detailed in [[11_The_6_Architectural_Pillars_and_Trap_Mitigations]]):
 
 1. **Storage Abstraction Interface**: Zero hardcoded local filesystem paths (`StorageProvider` interface for Local, MinIO, S3, R2).
-2. **Chunked Media Recording**: Browser streams 5-second audio/video slices; no single-blob RAM explosions.
-3. **Asynchronous Background Isolation**: FFmpeg video stitching and PDF compilation run strictly in background workers via Redis; HTTP handlers return `202 Accepted` immediately.
+2. **Guaranteed Buffer Direct Recording**: In-memory continuous slice buffering with forced `requestData()` buffer flush on stop and zero-byte rejection; eliminates the overhead and fragmentation of 5s chunking.
+3. **Asynchronous Background Isolation**: PDF compilation and background tasks run asynchronously via Go Goroutines (with 202 Accepted); HTTP handlers remain fast and non-blocking.
 4. **Stateless Backend**: Zero server-side state in memory; 100% config driven by environment variables (`.env`).
 5. **Strict HTTPS / SSL Requirement**: Media devices (`getUserMedia` and `getDisplayMedia`) mandate HTTPS in any staging or production environment.
 6. **Timezone Precision (UTC vs IST)**: Timestamps stored in UTC (`TIMESTAMPTZ`) and durations in raw seconds; formatted to IST (UTC+05:30) only at display/PDF time.

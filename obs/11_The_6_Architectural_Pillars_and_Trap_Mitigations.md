@@ -20,8 +20,8 @@ This document outlines the **6 Non-Negotiable Engineering Pillars** for the plat
 ```mermaid
 flowchart TD
     P1["1. Storage Abstraction<br/>(No Hardcoded Local Paths)"]
-    P2["2. 5-Second Media Chunks<br/>(No Giant Upload Blobs)"]
-    P3["3. Background Job Isolation<br/>(202 Accepted + Redis Queue)"]
+    P2["2. Buffer Flush & Direct Upload<br/>(No 0-Byte WebM / Direct Streaming)"]
+    P3["3. Background Job Isolation<br/>(202 Accepted + Async Goroutines)"]
     P4["4. Stateless Go Server<br/>(JWT + Strict .env Config)"]
     P5["5. HTTPS & CORS Mandate<br/>(Let's Encrypt for Media APIs)"]
     P6["6. UTC & Integer Seconds<br/>(Strict IST at Display Only)"]
@@ -71,64 +71,67 @@ type StorageProvider interface {
 ### Implementations:
 1. **Demo / Local Dev**: Use `MinIOStorageProvider` (an S3-compatible local Docker container) or `LocalStorageProvider` implementing the same interface.
 2. **Production**: Use `S3StorageProvider` (AWS S3) or `R2StorageProvider` (Cloudflare R2).
-* **The Benefit**: Your Go HTTP handlers and database records store only abstract keys (e.g., `cases/MOT18221241/chunks/chunk_001.webm`). Switching between local MinIO and AWS S3 requires changing **only one configuration string in `.env`**—not a single line of business code changes.
+* **The Benefit**: Your Go HTTP handlers and database records store only abstract keys (e.g., `cases/case-hgv-101/recordings/rec_1794898310.webm`). Switching between local MinIO and AWS S3 requires changing **only one configuration string in `.env`**—not a single line of business code changes.
 
 ---
 
-## Pillar 2: The Browser Media Recording Chunks Trap
+## Pillar 2: The Media Recording Buffer Flush Trap (Direct Upload over 5s Chunking)
 
-### The Trap
-Developers use the browser's `MediaRecorder` API and wait for the recording to finish before sending the payload:
-```javascript
-// ❌ WRONG: RAM Explosion & Wi-Fi Catastrophe
-recorder.onstop = () => {
-    const giantBlob = new Blob(allChunks);
-    uploadBlob(giantBlob); // 500MB payload!
-};
-```
-On localhost, sending a 500 MB mock file in one shot succeeds. In real life, a **2-hour tele-verification call** over unstable 4G/Wi-Fi will:
-* Consume 1 GB+ of RAM in Chrome, causing low-spec investigator laptops to crash or freeze.
-* Result in an HTTP timeout on the reverse proxy (Nginx `client_max_body_size` or 60s gateway timeout).
-* If the investigator accidentally closes the browser tab at minute 118, **all 118 minutes of evidence are lost forever**.
+### The Traps
+1. **The 0-Byte Codec Buffer Trap**: Developers invoke `mediaRecorder.stop()` without flushing browser codec buffers. The `onstop` callback fires before the final audio/video frame packet finishes encoding, resulting in 0-byte WebM uploads and corrupted evidence files.
+2. **The 5-Second Chunking & Active Recovery Trap**: Slicing media every 5 seconds (`recorder.start(5000)`) and queueing chunks via Redis was initially evaluated, but at the platform's realistic scale (~100 simultaneous agents), it created severe disadvantages:
+   * **Network Flooding**: 100 concurrent agents produced 20 HTTP multipart uploads every second, saturating mobile hotspots.
+   * **File Fragmentation**: Missing or out-of-order chunks caused frequent FFmpeg stitch failures.
+   * **Infrastructure Overhead**: Required running and monitoring Redis, Asynq, and FFmpeg workers just to join 5-second video pieces.
 
-### The Rule: Configure 5-Second Slices (`recorder.start(5000)`)
-* Configure the frontend recorder with 5-second intervals:
+### The Rule: Continuous Slice Buffering, Forced Buffer Flush & Direct Upload
+* Collect slices in memory every 500ms (`recorder.start(500)`):
   ```javascript
-  // ✅ CORRECT: Sequential 5-Second Slices
-  recorder.start(5000); 
-  recorder.ondataavailable = (e) => stageAndUploadChunk(e.data);
+  // ✅ CORRECT: Continuous buffer gathering with pause/resume support
+  recorder.start(500);
+  recorder.ondataavailable = (e) => {
+    if (e.data && e.data.size > 0) recordedChunks.push(e.data);
+  };
   ```
-* The frontend streams or stages chunks sequentially to `/api/cases/:id/recordings/:recId/chunks`.
-* If the browser tab crashes after 1 hour, **720 chunks are already safely persisted in object storage**. Only the last 5 seconds are at risk.
+* Before stopping, force-flush all pending codec buffers:
+  ```javascript
+  // ✅ FORCE FLUSH: Guarantees non-zero completed WebM
+  if (recorder.state === 'recording' || recorder.state === 'paused') {
+    recorder.requestData();
+  }
+  await new Promise((res) => { recorder.onstop = res; recorder.stop(); });
+  const fullBlob = new Blob(recordedChunks, { type: 'video/webm' });
+  if (fullBlob.size === 0) throw new Error('Recording captured 0 bytes');
+  ```
+* Upload the complete video in one shot directly to `POST /api/v1/cases/:id/recordings/direct`.
+* The Go backend computes SHA-256 on-the-fly (`io.TeeReader`) and saves the master recording with `status = 'READY'` in a single round-trip.
 
 ---
 
-## Pillar 3: Background Job Isolation (Video Hashing & PDF Rendering)
+## Pillar 3: Background Job Isolation (PDF Dossier Compilation & Asynchronous Decoupling)
 
 ### The Trap
-Running video concatenation (`ffmpeg`), SHA-256 cryptographic checksum calculation, and headless PDF compilation synchronously inside an HTTP handler:
+Running PDF compilation, HTML templating, and cryptographic image hashing synchronously inside an HTTP handler:
 ```go
 // ❌ WRONG: Freezes HTTP Server Thread
 func SubmitCase(c *gin.Context) {
-    exec.Command("ffmpeg", ...).Run() // Blocks for 45 seconds!
-    generatePDF()                     // Blocks for 10 seconds!
+    generateHeavyPDF() // Blocks for 10-15 seconds!
     c.JSON(200, "Done")
 }
 ```
-If two agents submit cases simultaneously, running FFmpeg and PDF compilation on the main web server process consumes 100% of CPU cores, causing all incoming API requests to queue and freezing the dashboard for every user.
+If multiple agents submit or admins sign off simultaneously, running CPU-intensive PDF compilation on the main web server thread blocks incoming API requests and freezes the dashboard.
 
-### The Rule: Decouple via Queue & Return `202 Accepted`
+### The Rule: Decouple via Asynchronous Execution & Return `202 Accepted`
 ```mermaid
 flowchart LR
-    HTTP["Client POST /submit"] --> RESP["HTTP 202 Accepted<br/>(Immediately returned in < 25ms)"]
-    HTTP --> QUEUE[("Redis Task Queue (Asynq)")]
-    QUEUE --> WORKER["Go Worker Daemon"]
-    WORKER --> FFMPEG["FFmpeg Stitching"]
-    WORKER --> HASH["SHA-256 Checksum"]
-    WORKER --> PDF["Headless PDF Compiler"]
+    HTTP["Admin POST /sign-off"] --> RESP["HTTP 202 Accepted<br/>(Immediately returned in < 20ms)"]
+    HTTP --> GOROUTINE["Async Go Goroutine<br/>(context.WithTimeout)"]
+    GOROUTINE --> PDF["Headless PDF Compiler"]
+    GOROUTINE --> S3["Upload Locked Dossier to StorageProvider"]
+    GOROUTINE --> DB["Update cases.locked_pdf_path"]
 ```
-* The HTTP route immediately returns `202 Accepted` (`status: "PROCESSING"`).
-* A background worker (`hibiken/asynq` with Redis, or an in-memory buffered worker pool for demo) executes concatenation, hashing, and PDF generation asynchronously with controlled concurrency.
+* The HTTP route immediately returns `202 Accepted` (`status: "ACCEPTED"`).
+* Heavy operations (dossier PDF compilation, tamper-evident QR generation) execute in asynchronous Go Goroutines (or optional worker daemon for multi-node deployments) with strict context timeouts.
 
 ---
 

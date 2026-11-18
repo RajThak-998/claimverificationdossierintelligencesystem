@@ -52,10 +52,8 @@ stateDiagram-v2
     ADMIN_SIGN_OFF --> COMPLETED : Admin Sign-Off Executed
 
     state COMPLETED {
-        [*] --> QueueJobDispatched : 202 Accepted
-        QueueJobDispatched --> FFmpegStitching : Worker Concatenates Chunks
-        FFmpegStitching --> SHA256Hashing : Cryptographic Checksum Computed
-        SHA256Hashing --> PDFGeneration : Tamper-Evident PDF Compiled
+        [*] --> AsyncJobDispatched : 202 Accepted
+        AsyncJobDispatched --> PDFGeneration : Tamper-Evident PDF Compiled
         PDFGeneration --> LedgerLocked : Operational Minutes Invoiced
     }
 
@@ -82,7 +80,7 @@ stateDiagram-v2
 ### State 2: `WORK_IN_PROGRESS` (WIP)
 * **Trigger**: Case assigned to an investigator.
 * **Core Agent Activities**:
-  1. **Tele-Verification**: Click **Chat & Record** next to contact (Insured, Driver, Owner, Garage Mechanic) to launch WhatsApp Web and activate the browser `MediaRecorder` (5-second streaming chunks).
+  1. **Tele-Verification**: Click **WhatsApp Call** / **Chat & Record** next to contact (Insured, Driver, Owner, Garage Mechanic) to launch WhatsApp Web and activate permanent floating recording and snapshot controls (with pause/resume, buffer flush, and direct video upload).
   2. **Recall Management**: If the contact's line is busy, switched off, or asks for a callback, log a remark and set a **Recall Timer** (`15M`, `30M`, `1H`, `2H`, `4H`, `1D`, or `CUSTOM`).
   3. **Evidence Upload**: Upload supplemental documents (RC, DL, FIR/GD, Commercial Permit, Load Challan, Garage Estimates, live call screenshots).
   4. **Observation Capture**: Populate the 10 compulsory observation fields (`*`).
@@ -121,9 +119,8 @@ stateDiagram-v2
 * **Trigger**: Admin signs off.
 * **Automated Asynchronous Execution (202 Pattern)**:
   1. API locks case record (no further edits permitted).
-  2. Background task enqueued to Redis (`hibiken/asynq`):
-     * Video/Audio worker concatenates all 5-second media chunks via FFmpeg.
-     * Computes SHA-256 checksum of final master recording file.
+  2. Background task dispatched (via in-memory Go Goroutines or background queue):
+     * Verifies master recording file and its SHA-256 cryptographic checksum (computed on-the-fly during upload).
      * Compiles tamper-evident PDF dossier (embedding metadata, 10 observation fields, screenshots, SHA-256 hash, and QR code).
      * Calculates billable operational minutes (rounded or per exact contract terms) and writes to insurer billing ledger.
   3. Insurer portal gains immediate read/download access to final certified PDF and recording stream.
