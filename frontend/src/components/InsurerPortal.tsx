@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Shield, FileText, Download, CheckCircle2, Clock, ExternalLink, RefreshCw } from 'lucide-react';
-import { api } from '../api/client';
+import { api, getCasePDFDownloadUrl } from '../api/client';
 import { CaseItem } from '../types';
 
 interface InsurerPortalProps {
@@ -98,7 +98,7 @@ export const InsurerPortal: React.FC<InsurerPortalProps> = ({ currentUser, onOpe
                     </td>
                     <td className="px-4 py-3 text-right space-x-2">
                       <a
-                        href={`/api/v1/cases/${cs.id}/pdf/download`}
+                        href={getCasePDFDownloadUrl(cs.id)}
                         target="_blank"
                         rel="noreferrer"
                         className="inline-flex items-center space-x-1 px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs"

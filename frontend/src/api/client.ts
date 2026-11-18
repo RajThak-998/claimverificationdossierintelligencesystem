@@ -167,6 +167,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ observations_data: observations, conclusion_data: conclusion }),
     }),
+  improveObservationsWithAI: (caseId: string, fields: Record<string, string>) =>
+    request<{ fields: Record<string, string> }>(`/cases/${caseId}/observations/improve-ai`, {
+      method: 'POST',
+      body: JSON.stringify({ fields }),
+    }),
   submitCaseReport: (caseId: string, observations: any, conclusion: any) =>
     request<any>(`/cases/${caseId}/submit`, {
       method: 'POST',
@@ -196,3 +201,41 @@ export const api = {
   // Public Cryptographic Verification
   verifyDossier: (uuid: string) => request<any>(`/public/verify/dossier/${uuid}`),
 };
+
+export function getCasePDFDownloadUrl(caseId: string, inline: boolean = false): string {
+  const token = getStoredToken();
+  const params = new URLSearchParams();
+  if (token) params.set('token', token);
+  if (inline) params.set('inline', 'true');
+  const qs = params.toString();
+  return `${BASE_URL}/cases/${caseId}/pdf/download${qs ? `?${qs}` : ''}`;
+}
+
+export async function downloadCasePDF(caseId: string, caseNumber?: string): Promise<void> {
+  const token = getStoredToken();
+  const headers = new Headers();
+  if (token) {
+    headers.set('Authorization', `Bearer ${token}`);
+  }
+  const response = await fetch(`${BASE_URL}/cases/${caseId}/pdf/download`, {
+    headers,
+  });
+  if (!response.ok) {
+    let errorMsg = `PDF download failed: ${response.status} ${response.statusText}`;
+    try {
+      const errJson = await response.json();
+      if (errJson.error) errorMsg = errJson.error;
+    } catch (_) {}
+    throw new Error(errorMsg);
+  }
+  const blob = await response.blob();
+  const blobUrl = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = blobUrl;
+  a.download = `dossier_${caseNumber || caseId}.pdf`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  window.URL.revokeObjectURL(blobUrl);
+}
+

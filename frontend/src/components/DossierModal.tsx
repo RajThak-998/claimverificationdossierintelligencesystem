@@ -20,9 +20,11 @@ import {
   ChevronRight,
   ExternalLink,
   Plus,
+  Sparkles,
+  Loader2,
 } from 'lucide-react';
 import { FullCaseRecord, ContactRole, CallDisposition, DocumentCategory } from '../types';
-import { api } from '../api/client';
+import { api, getCasePDFDownloadUrl, downloadCasePDF } from '../api/client';
 
 interface DossierModalProps {
   caseId: string;
@@ -84,6 +86,35 @@ export const DossierModal: React.FC<DossierModalProps> = ({
   const [saveSuccessMsg, setSaveSuccessMsg] = useState('');
   const [saving, setSaving] = useState(false);
 
+  // AI Polish state (Section 6: Observations)
+  const [improvingAI, setImprovingAI] = useState(false);
+  const [aiSuccessMsg, setAiSuccessMsg] = useState('');
+  const [aiErrorMsg, setAiErrorMsg] = useState('');
+
+  // AI Polish state (Section 7: Conclusion & Remarks)
+  const [improvingConclusionAI, setImprovingConclusionAI] = useState(false);
+  const [aiConclusionSuccessMsg, setAiConclusionSuccessMsg] = useState('');
+  const [aiConclusionErrorMsg, setAiConclusionErrorMsg] = useState('');
+
+  // PDF Download state
+  const [downloadingPDF, setDownloadingPDF] = useState(false);
+  const [pdfDownloadError, setPdfDownloadError] = useState('');
+
+  const handleDownloadPDF = async () => {
+    if (!data?.case) return;
+    setDownloadingPDF(true);
+    setPdfDownloadError('');
+    try {
+      await downloadCasePDF(caseId, data.case.case_number);
+    } catch (err: any) {
+      console.error('PDF download error:', err);
+      setPdfDownloadError(err?.message || 'Failed to download PDF dossier');
+      window.open(getCasePDFDownloadUrl(caseId), '_blank');
+    } finally {
+      setDownloadingPDF(false);
+    }
+  };
+
   const loadCaseRecord = async () => {
     try {
       setLoading(true);
@@ -139,6 +170,93 @@ export const DossierModal: React.FC<DossierModalProps> = ({
       alert(`Save failed: ${err.message}`);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleImproveWithAI = async () => {
+    const fieldsToImprove: Record<string, string> = {};
+    const textKeys = [
+      'insured_version',
+      'driver_version',
+      'occupant_cleaner_version',
+      'relation_with_insured',
+      'kyc_documents',
+      'profession_contacted',
+      'hospital_injury_remarks',
+      'damages_garage_remarks',
+      'social_media_news',
+      'evidences_remarks',
+      'cleaner_statement',
+    ];
+
+    for (const key of textKeys) {
+      const val = observations[key];
+      if (typeof val === 'string' && val.trim().length > 0) {
+        fieldsToImprove[key] = val.trim();
+      }
+    }
+
+    if (Object.keys(fieldsToImprove).length === 0) {
+      setAiErrorMsg('Please write notes in at least one observation field before improving with AI.');
+      setTimeout(() => setAiErrorMsg(''), 4000);
+      return;
+    }
+
+    setImprovingAI(true);
+    setAiSuccessMsg('');
+    setAiErrorMsg('');
+    try {
+      const res = await api.improveObservationsWithAI(caseId, fieldsToImprove);
+      if (res && res.fields) {
+        setObservations((prev) => ({
+          ...prev,
+          ...res.fields,
+        }));
+        setAiSuccessMsg('Observation notes improved with AI (grammar & presentation refined; facts preserved).');
+        setTimeout(() => setAiSuccessMsg(''), 5000);
+      }
+    } catch (err: any) {
+      setAiErrorMsg(`AI improvement error: ${err.message || 'Failed to refine text'}`);
+      setTimeout(() => setAiErrorMsg(''), 5000);
+    } finally {
+      setImprovingAI(false);
+    }
+  };
+
+  const handleImproveConclusionWithAI = async () => {
+    const fieldsToImprove: Record<string, string> = {};
+    if (conclusion.conclusion && typeof conclusion.conclusion === 'string' && conclusion.conclusion.trim().length > 0) {
+      fieldsToImprove.conclusion = conclusion.conclusion.trim();
+    }
+    if (conclusion.final_remarks && typeof conclusion.final_remarks === 'string' && conclusion.final_remarks.trim().length > 0) {
+      fieldsToImprove.final_remarks = conclusion.final_remarks.trim();
+    }
+
+    if (Object.keys(fieldsToImprove).length === 0) {
+      setAiConclusionErrorMsg('Please write Conclusion Summary or Final Remarks before improving with AI.');
+      setTimeout(() => setAiConclusionErrorMsg(''), 4000);
+      return;
+    }
+
+    setImprovingConclusionAI(true);
+    setAiConclusionSuccessMsg('');
+    setAiConclusionErrorMsg('');
+    try {
+      const res = await api.improveObservationsWithAI(caseId, fieldsToImprove);
+      if (res && res.fields) {
+        setConclusion((prev) => ({
+          ...prev,
+          ...(res.fields.conclusion ? { conclusion: res.fields.conclusion } : {}),
+          ...(res.fields.final_remarks ? { final_remarks: res.fields.final_remarks } : {}),
+        }));
+        setAiConclusionSuccessMsg('Conclusion and remarks improved with AI (grammar & presentation refined; facts preserved).');
+        setTimeout(() => setAiConclusionSuccessMsg(''), 5000);
+      }
+    } catch (err: any) {
+      setAiConclusionErrorMsg(`AI improvement error: ${err.message || 'Failed to refine text'}`);
+      setTimeout(() => setAiConclusionErrorMsg(''), 5000);
+    } finally {
+      setImprovingConclusionAI(false);
     }
   };
 
@@ -351,15 +469,19 @@ export const DossierModal: React.FC<DossierModalProps> = ({
               <span>{cs.duration_formatted}</span>
             </div>
 
-            <a
-              href={`/api/v1/cases/${cs.id}/pdf/download`}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center space-x-1 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-semibold transition-colors"
+            <button
+              onClick={handleDownloadPDF}
+              disabled={downloadingPDF}
+              className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-semibold transition-colors disabled:opacity-50"
+              title="Download Certified Dossier PDF"
             >
-              <Download className="w-3.5 h-3.5 text-trust-400" />
-              <span>Certified PDF</span>
-            </a>
+              {downloadingPDF ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-trust-400" />
+              ) : (
+                <Download className="w-3.5 h-3.5 text-trust-400" />
+              )}
+              <span>{downloadingPDF ? 'Compiling PDF...' : 'Certified PDF'}</span>
+            </button>
 
             <button
               onClick={onClose}
@@ -1061,6 +1183,71 @@ export const DossierModal: React.FC<DossierModalProps> = ({
                   )}
                 </div>
               </div>
+
+              {/* Bottom Action Bar for Section 6 */}
+              <div className="flex items-center justify-between flex-wrap gap-3 bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
+                {/* Bottom Left: Improve with AI (Only for AGENT role) */}
+                <div className="flex items-center space-x-3">
+                  {currentUser?.role === 'AGENT' && (
+                    <button
+                      type="button"
+                      onClick={handleImproveWithAI}
+                      disabled={improvingAI || !isEditable}
+                      title="Refines grammar, phrasing and presentation into professional insurance English while strictly preserving meaning and facts"
+                      className="inline-flex items-center space-x-2 px-4 py-2.5 rounded-lg border border-purple-200 bg-linear-to-r from-purple-50 to-indigo-50 hover:from-purple-100 hover:to-indigo-100 text-purple-900 text-xs font-bold transition-all shadow-xs disabled:opacity-50 disabled:cursor-not-allowed group cursor-pointer"
+                    >
+                      {improvingAI ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin text-purple-600" />
+                          <span>Improving with AI...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles className="w-4 h-4 text-purple-600 group-hover:scale-110 transition-transform" />
+                          <span>Improve with AI</span>
+                        </>
+                      )}
+                    </button>
+                  )}
+
+                  {aiSuccessMsg && (
+                    <div className="flex items-center space-x-1.5 text-xs text-emerald-700 font-medium bg-emerald-50 px-3 py-1.5 rounded-lg border border-emerald-200">
+                      <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                      <span>{aiSuccessMsg}</span>
+                    </div>
+                  )}
+
+                  {aiErrorMsg && (
+                    <div className="flex items-center space-x-1.5 text-xs text-rose-700 font-medium bg-rose-50 px-3 py-1.5 rounded-lg border border-rose-200">
+                      <AlertTriangle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                      <span>{aiErrorMsg}</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Bottom Right: Quick Save Draft & Next Button */}
+                {isEditable && (
+                  <div className="flex items-center space-x-2 ml-auto">
+                    <button
+                      type="button"
+                      onClick={handleSaveDraft}
+                      disabled={saving}
+                      className="inline-flex items-center space-x-1.5 px-4 py-2.5 rounded-lg border border-slate-300 bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-bold transition-colors"
+                    >
+                      <Save className="w-4 h-4 text-slate-500" />
+                      <span>{saving ? 'Saving...' : 'Save Draft'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setActiveSection(7)}
+                      className="inline-flex items-center space-x-1.5 px-4 py-2.5 rounded-lg bg-trust-600 hover:bg-trust-700 text-white text-xs font-bold transition-colors"
+                    >
+                      <span>Proceed to Conclusion</span>
+                      <ChevronRight className="w-4 h-4" />
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           )}
 
@@ -1164,24 +1351,66 @@ export const DossierModal: React.FC<DossierModalProps> = ({
 
               {/* Execution Action Bar for Agent */}
               {isEditable && (
-                <div className="flex items-center justify-end space-x-3 bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
-                  <button
-                    onClick={handleSaveDraft}
-                    disabled={saving}
-                    className="inline-flex items-center space-x-1.5 px-4 py-2.5 rounded-lg border border-slate-300 bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-bold transition-colors"
-                  >
-                    <Save className="w-4 h-4 text-slate-500" />
-                    <span>{saving ? 'Saving...' : 'Save as Draft'}</span>
-                  </button>
+                <div className="flex items-center justify-between flex-wrap gap-3 bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
+                  {/* Bottom Left: Improve with AI (Only for AGENT role) */}
+                  <div className="flex items-center space-x-3">
+                    {currentUser?.role === 'AGENT' && (
+                      <button
+                        type="button"
+                        onClick={handleImproveConclusionWithAI}
+                        disabled={improvingConclusionAI || !isEditable}
+                        title="Refines grammar, phrasing and presentation of conclusion and remarks into professional insurance English while strictly preserving meaning and facts"
+                        className="inline-flex items-center space-x-2 px-4 py-2.5 rounded-lg border border-purple-200 bg-linear-to-r from-purple-50 to-indigo-50 hover:from-purple-100 hover:to-indigo-100 text-purple-900 text-xs font-bold transition-all shadow-xs disabled:opacity-50 disabled:cursor-not-allowed group cursor-pointer"
+                      >
+                        {improvingConclusionAI ? (
+                          <>
+                            <Loader2 className="w-4 h-4 animate-spin text-purple-600" />
+                            <span>Improving with AI...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Sparkles className="w-4 h-4 text-purple-600 group-hover:scale-110 transition-transform" />
+                            <span>Improve with AI</span>
+                          </>
+                        )}
+                      </button>
+                    )}
 
-                  <button
-                    onClick={handleSubmitAndLock}
-                    disabled={saving}
-                    className="inline-flex items-center space-x-1.5 px-5 py-2.5 rounded-lg bg-trust-600 hover:bg-trust-700 text-white text-xs font-bold shadow-sm transition-colors"
-                  >
-                    <Send className="w-4 h-4" />
-                    <span>Submit Report & Lock Case</span>
-                  </button>
+                    {aiConclusionSuccessMsg && (
+                      <div className="flex items-center space-x-1.5 text-xs text-emerald-700 font-medium bg-emerald-50 px-3 py-1.5 rounded-lg border border-emerald-200">
+                        <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                        <span>{aiConclusionSuccessMsg}</span>
+                      </div>
+                    )}
+
+                    {aiConclusionErrorMsg && (
+                      <div className="flex items-center space-x-1.5 text-xs text-rose-700 font-medium bg-rose-50 px-3 py-1.5 rounded-lg border border-rose-200">
+                        <AlertTriangle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                        <span>{aiConclusionErrorMsg}</span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Bottom Right: Save as Draft & Submit Report and Lock */}
+                  <div className="flex items-center space-x-3 ml-auto">
+                    <button
+                      onClick={handleSaveDraft}
+                      disabled={saving}
+                      className="inline-flex items-center space-x-1.5 px-4 py-2.5 rounded-lg border border-slate-300 bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-bold transition-colors"
+                    >
+                      <Save className="w-4 h-4 text-slate-500" />
+                      <span>{saving ? 'Saving...' : 'Save as Draft'}</span>
+                    </button>
+
+                    <button
+                      onClick={handleSubmitAndLock}
+                      disabled={saving}
+                      className="inline-flex items-center space-x-1.5 px-5 py-2.5 rounded-lg bg-trust-600 hover:bg-trust-700 text-white text-xs font-bold shadow-sm transition-colors"
+                    >
+                      <Send className="w-4 h-4" />
+                      <span>Submit Report & Lock Case</span>
+                    </button>
+                  </div>
                 </div>
               )}
 
@@ -1234,6 +1463,46 @@ export const DossierModal: React.FC<DossierModalProps> = ({
                   >
                     Execute Commercial Sign-Off & Lock Vault
                   </button>
+                </div>
+              )}
+
+              {/* Completed & Legally Sealed Banner */}
+              {cs.status === 'COMPLETED' && (
+                <div className="bg-emerald-50 rounded-xl p-5 border border-emerald-200 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div>
+                    <h4 className="text-sm font-bold text-emerald-900 flex items-center space-x-1.5">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                      <span>Investigation Completed & Cryptographically Sealed</span>
+                    </h4>
+                    <p className="text-xs text-emerald-800 mt-0.5">
+                      Certified PDF dossier is generated with SHA-256 seal and QR code verification link.
+                    </p>
+                  </div>
+
+                  <div className="flex items-center space-x-2">
+                    <button
+                      onClick={handleDownloadPDF}
+                      disabled={downloadingPDF}
+                      className="inline-flex items-center space-x-1.5 px-5 py-2.5 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold shadow-sm transition-colors disabled:opacity-50"
+                    >
+                      {downloadingPDF ? (
+                        <Loader2 className="w-4 h-4 animate-spin text-white" />
+                      ) : (
+                        <Download className="w-4 h-4 text-emerald-200" />
+                      )}
+                      <span>{downloadingPDF ? 'Generating Dossier...' : 'Download Certified Dossier (PDF)'}</span>
+                    </button>
+                    <a
+                      href={getCasePDFDownloadUrl(cs.id, true)}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center space-x-1 px-3 py-2.5 rounded-lg bg-white border border-emerald-300 hover:bg-emerald-100 text-emerald-800 text-xs font-semibold transition-colors"
+                      title="View PDF in new browser tab"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                      <span>View</span>
+                    </a>
+                  </div>
                 </div>
               )}
             </div>

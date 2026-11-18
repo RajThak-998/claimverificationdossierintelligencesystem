@@ -84,6 +84,6 @@ func (h *PublicHandler) VerifyDossier(c *gin.Context) {
 		"success_tagging":           successTagging,
 		"ground_of_repudiation":     groundOfRepudiation,
 		"conclusion":                conclusion,
-		"certified_pdf_url":         fmt.Sprintf("/api/v1/cases/%s/pdf/download", cs.ID),
+		"certified_pdf_url":         fmt.Sprintf("/api/v1/public/dossier/%s/pdf", cs.VerificationUUID),
 	})
 }

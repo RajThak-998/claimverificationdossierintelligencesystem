@@ -7,6 +7,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 
 	"motor-platform/internal/auth"
@@ -35,6 +36,9 @@ func setupTestEnvironment(t *testing.T) (*gin.Engine, *gorm.DB, *config.Config, 
 		JWTExpirationHours: 24,
 		StorageBaseDir:     t.TempDir(),
 		StorageBaseURL:     "http://localhost:8080",
+		AIBaseURL:          "https://openrouter.ai/api/v1",
+		AIAPIKey:           os.Getenv("OPENROUTER_API_KEY"),
+		AIModel:            "openai/gpt-4o-mini",
 	}
 
 	db, err := gorm.Open(sqlite.Open(cfg.DBDSN), &gorm.Config{})
@@ -68,7 +72,7 @@ func setupTestEnvironment(t *testing.T) (*gin.Engine, *gorm.DB, *config.Config, 
 		return stitcher.StitchRecording(httptest.NewRequest("GET", "/", nil).Context(), caseID, recID)
 	})
 	contactH := handlers.NewContactHandler(db)
-	obsH := handlers.NewObservationHandler(db)
+	obsH := handlers.NewObservationHandler(db, cfg)
 	revH := handlers.NewReviewHandler(db, asyncCompleter)
 	billH := handlers.NewBillingHandler(db)
 	pubH := handlers.NewPublicHandler(db)
@@ -100,6 +104,7 @@ func setupTestEnvironment(t *testing.T) (*gin.Engine, *gorm.DB, *config.Config, 
 
 			protected.GET("/cases/:id/observations", obsH.GetObservations)
 			protected.POST("/cases/:id/observations/draft", obsH.SaveDraft)
+			protected.POST("/cases/:id/observations/improve-ai", auth.RequireRole(models.RoleAgent, models.RoleAdmin), obsH.ImproveWithAI)
 			protected.POST("/cases/:id/submit", obsH.SubmitAndLock)
 
 			protected.POST("/cases/:id/review/approve", auth.RequireRole(models.RoleAdmin, models.RoleManager), revH.ApproveReview)
@@ -435,5 +440,69 @@ func TestPublicVerificationEndpoint(t *testing.T) {
 	}
 	if res.RecordedDuration != 1800 {
 		t.Fatalf("Expected 1800 recorded seconds, got %d", res.RecordedDuration)
+	}
+}
+
+func TestImproveWithAI_Validation(t *testing.T) {
+	router, _, cfg, _ := setupTestEnvironment(t)
+	agentToken := getAuthToken(t, router, "agent.palak@agency.com", "Password123!")
+
+	// 1. Test empty fields
+	payload, _ := json.Marshal(map[string]interface{}{
+		"fields": map[string]string{},
+	})
+	req := httptest.NewRequest("POST", "/api/v1/cases/case-wip-1/observations/improve-ai", bytes.NewBuffer(payload))
+	req.Header.Set("Authorization", "Bearer "+agentToken)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("Expected status 400 for empty fields, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// 2. Test role guard with Insurer token (must be forbidden)
+	insurerToken := getAuthToken(t, router, "claims@icicilombard.com", "Password123!")
+	payload2, _ := json.Marshal(map[string]interface{}{
+		"fields": map[string]string{"driver_version": "some text"},
+	})
+	req2 := httptest.NewRequest("POST", "/api/v1/cases/case-wip-1/observations/improve-ai", bytes.NewBuffer(payload2))
+	req2.Header.Set("Authorization", "Bearer "+insurerToken)
+	req2.Header.Set("Content-Type", "application/json")
+	w2 := httptest.NewRecorder()
+	router.ServeHTTP(w2, req2)
+
+	if w2.Code != http.StatusForbidden {
+		t.Fatalf("Expected status 403 Forbidden for INSURER role, got %d", w2.Code)
+	}
+
+	// 3. Live AI test if API key is present
+	if cfg.AIAPIKey != "" || os.Getenv("OPENROUTER_API_KEY") != "" {
+		payloadLive, _ := json.Marshal(map[string]interface{}{
+			"fields": map[string]string{
+				"insured_version": "i was sleeping at night driver called me told car met with accident near petrol pump",
+			},
+		})
+		reqLive := httptest.NewRequest("POST", "/api/v1/cases/case-wip-1/observations/improve-ai", bytes.NewBuffer(payloadLive))
+		reqLive.Header.Set("Authorization", "Bearer "+agentToken)
+		reqLive.Header.Set("Content-Type", "application/json")
+		wLive := httptest.NewRecorder()
+		router.ServeHTTP(wLive, reqLive)
+
+		if wLive.Code != http.StatusOK {
+			t.Fatalf("Expected status 200 for live AI improvement, got %d: %s", wLive.Code, wLive.Body.String())
+		}
+
+		var resLive struct {
+			Fields map[string]string `json:"fields"`
+		}
+		if err := json.Unmarshal(wLive.Body.Bytes(), &resLive); err != nil {
+			t.Fatalf("Failed to parse response: %v", err)
+		}
+		improved := resLive.Fields["insured_version"]
+		if improved == "" {
+			t.Fatalf("Expected non-empty improved insured_version")
+		}
+		t.Logf("✅ Live AI successfully improved text:\nOriginal: 'i was sleeping at night driver called me told car met with accident near petrol pump'\nImproved: '%s'", improved)
 	}
 }

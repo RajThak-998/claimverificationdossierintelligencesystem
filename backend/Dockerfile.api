@@ -13,7 +13,7 @@ RUN CGO_ENABLED=1 GOOS=linux go build -ldflags="-s -w" -o /app/motor-api ./cmd/a
 # Final minimal runtime container
 FROM alpine:3.20
 
-RUN apk add --no-cache ca-certificates tzdata ffmpeg
+RUN apk add --no-cache ca-certificates tzdata ffmpeg chromium font-noto
 
 WORKDIR /app
 COPY --from=builder /app/motor-api .

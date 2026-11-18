@@ -1,12 +1,18 @@
 package handlers
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
 	"motor-platform/internal/auth"
+	"motor-platform/internal/config"
 	"motor-platform/internal/models"
 
 	"github.com/gin-gonic/gin"
@@ -14,11 +20,12 @@ import (
 )
 
 type ObservationHandler struct {
-	db *gorm.DB
+	db  *gorm.DB
+	cfg *config.Config
 }
 
-func NewObservationHandler(db *gorm.DB) *ObservationHandler {
-	return &ObservationHandler{db: db}
+func NewObservationHandler(db *gorm.DB, cfg *config.Config) *ObservationHandler {
+	return &ObservationHandler{db: db, cfg: cfg}
 }
 
 type ObservationPayload struct {
@@ -227,5 +234,181 @@ func (h *ObservationHandler) SubmitAndLock(c *gin.Context) {
 		"status":     models.StatusReview,
 		"submitted_at": now,
 		"message":    "Case report validated and successfully submitted to QA Review queue",
+	})
+}
+
+type ImproveAIRequest struct {
+	Fields map[string]string `json:"fields"`
+}
+
+type ImproveAIResponse struct {
+	Fields map[string]string `json:"fields"`
+}
+
+func (h *ObservationHandler) ImproveWithAI(c *gin.Context) {
+	var req ImproveAIRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid payload: " + err.Error()})
+		return
+	}
+
+	// Filter out empty fields
+	nonEmptyFields := make(map[string]string)
+	for k, v := range req.Fields {
+		trimmed := strings.TrimSpace(v)
+		if trimmed != "" {
+			nonEmptyFields[k] = trimmed
+		}
+	}
+
+	if len(nonEmptyFields) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "no observation text provided to improve"})
+		return
+	}
+
+	apiKey := ""
+	if h.cfg != nil {
+		apiKey = strings.TrimSpace(h.cfg.AIAPIKey)
+	}
+	if apiKey == "" {
+		apiKey = strings.TrimSpace(os.Getenv("AI_API_KEY"))
+	}
+	if apiKey == "" {
+		apiKey = strings.TrimSpace(os.Getenv("OPENROUTER_API_KEY"))
+	}
+
+	if apiKey == "" {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"error": "AI service is not configured (AI_API_KEY or OPENROUTER_API_KEY missing)",
+		})
+		return
+	}
+
+	baseURL := "https://openrouter.ai/api/v1"
+	model := "openai/gpt-4o-mini"
+	if h.cfg != nil {
+		if h.cfg.AIBaseURL != "" {
+			baseURL = strings.TrimRight(h.cfg.AIBaseURL, "/")
+		}
+		if h.cfg.AIModel != "" {
+			model = h.cfg.AIModel
+		}
+	}
+
+	systemPrompt := `You are an expert insurance fraud investigator and editor for motor claims verification dossiers.
+Your ONLY task is to improve the grammar, spelling, phrasing, and overall presentation of the investigator's field notes into formal, clear, and legally defensible English.
+
+C
+3. DO NOT add any unsolicited recommendations, disclaimers, explanations, or introductory/closing commentary.RITICAL RULES:
+1. STRICTLY PRESERVE 100% OF THE FACTUAL MEANING AND INTENT.
+2. DO NOT change, alter, hallucinate, extrapolate, or invent ANY facts, names, phone numbers, vehicle registration numbers, speeds, timestamps, locations, damage descriptions, or conclusions.
+4. Output ONLY a valid JSON object matching the exact input keys, where each value is the corresponding improved text.`
+
+	inputBytes, err := json.Marshal(nonEmptyFields)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to encode fields: " + err.Error()})
+		return
+	}
+
+	aiReqBody := map[string]interface{}{
+		"model": model,
+		"messages": []map[string]string{
+			{"role": "system", "content": systemPrompt},
+			{"role": "user", "content": string(inputBytes)},
+		},
+		"response_format": map[string]string{"type": "json_object"},
+		"temperature":     0.1,
+		"max_tokens":      2000,
+	}
+
+	reqPayloadBytes, err := json.Marshal(aiReqBody)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to prepare AI request: " + err.Error()})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 25*time.Second)
+	defer cancel()
+
+	endpointURL := fmt.Sprintf("%s/chat/completions", baseURL)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpointURL, bytes.NewReader(reqPayloadBytes))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create HTTP request: " + err.Error()})
+		return
+	}
+
+	httpReq.Header.Set("Authorization", fmt.Sprintf("Bearer %s", apiKey))
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 25 * time.Second}
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "failed to communicate with AI API: " + err.Error()})
+		return
+	}
+	defer resp.Body.Close()
+
+	respBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "failed to read AI API response: " + err.Error()})
+		return
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		c.JSON(http.StatusBadGateway, gin.H{
+			"error": fmt.Sprintf("AI API returned status %d: %s", resp.StatusCode, string(respBytes)),
+		})
+		return
+	}
+
+	var chatResp struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+
+	if err := json.Unmarshal(respBytes, &chatResp); err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "failed to parse AI API response JSON: " + err.Error()})
+		return
+	}
+
+	if chatResp.Error != nil && chatResp.Error.Message != "" {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "AI API error: " + chatResp.Error.Message})
+		return
+	}
+
+	if len(chatResp.Choices) == 0 {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "empty choices returned from AI API"})
+		return
+	}
+
+	content := strings.TrimSpace(chatResp.Choices[0].Message.Content)
+	if strings.HasPrefix(content, "```") {
+		lines := strings.Split(content, "\n")
+		if len(lines) >= 2 {
+			lines = lines[1:]
+			if len(lines) > 0 && strings.HasPrefix(strings.TrimSpace(lines[len(lines)-1]), "```") {
+				lines = lines[:len(lines)-1]
+			}
+			content = strings.Join(lines, "\n")
+		}
+	}
+
+	var improvedFields map[string]string
+	if err := json.Unmarshal([]byte(content), &improvedFields); err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{
+			"error":       "failed to decode structured JSON from AI output: " + err.Error(),
+			"raw_content": content,
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, ImproveAIResponse{
+		Fields: improvedFields,
 	})
 }

@@ -73,6 +73,9 @@ services:
       - STORAGE_BASE_URL=http://localhost:8080
       - JWT_SECRET=${JWT_SECRET:-super-secret-jwt-signing-key-32chars}
       - APP_ENV=production
+      - AI_BASE_URL=${AI_BASE_URL:-https://openrouter.ai/api/v1}
+      - AI_API_KEY=${AI_API_KEY}
+      - AI_MODEL=${AI_MODEL:-openai/gpt-4o-mini}
     depends_on:
       postgres:
         condition: service_healthy

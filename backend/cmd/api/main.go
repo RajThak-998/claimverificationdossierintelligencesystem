@@ -109,7 +109,7 @@ func main() {
 	caseHandler := handlers.NewCaseHandler(db)
 	recordingHandler := handlers.NewRecordingHandler(db, storageProvider, asyncStitcher)
 	contactHandler := handlers.NewContactHandler(db)
-	observationHandler := handlers.NewObservationHandler(db)
+	observationHandler := handlers.NewObservationHandler(db, cfg)
 	reviewHandler := handlers.NewReviewHandler(db, asyncCompleter)
 	billingHandler := handlers.NewBillingHandler(db)
 	publicHandler := handlers.NewPublicHandler(db)
@@ -129,7 +129,7 @@ func main() {
 	r.Use(cors.New(corsConfig))
 
 	// Static Storage File Serving (for LocalStorageProvider)
-	r.GET("/storage/*filepath", func(c *gin.Context) {
+	storageFileHandler := func(c *gin.Context) {
 		relPath := strings.TrimPrefix(c.Param("filepath"), "/")
 		cleanPath := filepath.Clean(relPath)
 		fullPath := filepath.Join(cfg.StorageBaseDir, cleanPath)
@@ -167,7 +167,9 @@ func main() {
 			mimeType = "video/webm"
 		}
 		c.DataFromReader(http.StatusOK, -1, mimeType, reader, nil)
-	})
+	}
+	r.GET("/storage/*filepath", storageFileHandler)
+	r.HEAD("/storage/*filepath", storageFileHandler)
 
 	// Public Health Endpoint
 	r.GET("/health", func(c *gin.Context) {
@@ -183,6 +185,35 @@ func main() {
 	{
 		// Public Verification Endpoint (No Auth Required)
 		v1.GET("/public/verify/dossier/:uuid", publicHandler.VerifyDossier)
+		v1.GET("/public/dossier/:uuid/pdf", func(c *gin.Context) {
+			uuidParam := c.Param("uuid")
+			var cs models.Case
+			if err := db.Where("verification_uuid = ? OR id = ? OR case_number = ?", uuidParam, uuidParam, uuidParam).First(&cs).Error; err != nil {
+				c.JSON(http.StatusNotFound, gin.H{"error": "case not found"})
+				return
+			}
+
+			if cs.LockedPDFPath == nil || *cs.LockedPDFPath == "" || strings.HasSuffix(*cs.LockedPDFPath, ".html") {
+				_ = pdfGenerator.CompileDossier(c.Request.Context(), cs.ID)
+				db.Where("id = ?", cs.ID).First(&cs)
+			}
+
+			if cs.LockedPDFPath != nil && *cs.LockedPDFPath != "" {
+				reader, err := storageProvider.DownloadFile(c.Request.Context(), *cs.LockedPDFPath)
+				if err == nil {
+					defer reader.Close()
+					disposition := "attachment"
+					if c.Query("inline") == "true" {
+						disposition = "inline"
+					}
+					c.Header("Content-Disposition", fmt.Sprintf("%s; filename=dossier_%s.pdf", disposition, cs.CaseNumber))
+					c.DataFromReader(http.StatusOK, -1, "application/pdf", reader, nil)
+					return
+				}
+			}
+
+			c.JSON(http.StatusNotFound, gin.H{"error": "dossier not ready yet"})
+		})
 		v1.GET("/cases/template/csv", caseHandler.DownloadTemplateCSV)
 
 		// Public Auth
@@ -212,8 +243,8 @@ func main() {
 					return
 				}
 
-				if cs.LockedPDFPath == nil || *cs.LockedPDFPath == "" {
-					// Generate now if not ready
+				if cs.LockedPDFPath == nil || *cs.LockedPDFPath == "" || strings.HasSuffix(*cs.LockedPDFPath, ".html") {
+					// Generate now if not ready or if old HTML
 					_ = pdfGenerator.CompileDossier(c.Request.Context(), caseID)
 					db.Where("id = ?", caseID).First(&cs)
 				}
@@ -222,8 +253,12 @@ func main() {
 					reader, err := storageProvider.DownloadFile(c.Request.Context(), *cs.LockedPDFPath)
 					if err == nil {
 						defer reader.Close()
-						c.Header("Content-Disposition", fmt.Sprintf("inline; filename=dossier_%s.html", cs.CaseNumber))
-						c.DataFromReader(http.StatusOK, -1, "text/html; charset=utf-8", reader, nil)
+						disposition := "attachment"
+						if c.Query("inline") == "true" {
+							disposition = "inline"
+						}
+						c.Header("Content-Disposition", fmt.Sprintf("%s; filename=dossier_%s.pdf", disposition, cs.CaseNumber))
+						c.DataFromReader(http.StatusOK, -1, "application/pdf", reader, nil)
 						return
 					}
 				}
@@ -249,6 +284,7 @@ func main() {
 			// Observations Engine & Submission
 			protected.GET("/cases/:id/observations", observationHandler.GetObservations)
 			protected.POST("/cases/:id/observations/draft", observationHandler.SaveDraft)
+			protected.POST("/cases/:id/observations/improve-ai", auth.RequireRole(models.RoleAgent, models.RoleAdmin), observationHandler.ImproveWithAI)
 			protected.POST("/cases/:id/submit", observationHandler.SubmitAndLock)
 
 			// QA Review & Sign-Off

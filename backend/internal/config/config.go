@@ -51,6 +51,9 @@ type Config struct {
 	BaseCaseFeeINR           float64
 	DefaultPerMinuteRateINR  float64
 	CORSAllowedOrigins       string
+	AIBaseURL                string
+	AIAPIKey                 string
+	AIModel                  string
 }
 
 func getEnv(key, defaultVal string) string {
@@ -119,5 +122,8 @@ func LoadConfig() *Config {
 		BaseCaseFeeINR:          getEnvFloat("BASE_CASE_FEE_INR", 750.00),
 		DefaultPerMinuteRateINR: getEnvFloat("DEFAULT_PER_MINUTE_RATE_INR", 45.00),
 		CORSAllowedOrigins:      getEnv("CORS_ALLOWED_ORIGINS", "*"),
+		AIBaseURL:               getEnv("AI_BASE_URL", "https://openrouter.ai/api/v1"),
+		AIAPIKey:                getEnv("AI_API_KEY", getEnv("OPENROUTER_API_KEY", "")),
+		AIModel:                 getEnv("AI_MODEL", "openai/gpt-4o-mini"),
 	}
 }
