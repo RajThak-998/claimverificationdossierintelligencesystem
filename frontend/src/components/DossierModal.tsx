@@ -22,8 +22,10 @@ import {
   Plus,
   Sparkles,
   Loader2,
+  Eye,
+  Play,
 } from 'lucide-react';
-import { FullCaseRecord, ContactRole, CallDisposition, DocumentCategory } from '../types';
+import { FullCaseRecord, ContactRole, CallDisposition, DocumentCategory, CaseScreenshot } from '../types';
 import { api, getCasePDFDownloadUrl, downloadCasePDF } from '../api/client';
 
 interface DossierModalProps {
@@ -99,6 +101,48 @@ export const DossierModal: React.FC<DossierModalProps> = ({
   // PDF Download state
   const [downloadingPDF, setDownloadingPDF] = useState(false);
   const [pdfDownloadError, setPdfDownloadError] = useState('');
+
+  // Screenshot Preview Lightbox state (View exact screenshot as image)
+  const [previewScreenshot, setPreviewScreenshot] = useState<CaseScreenshot | null>(null);
+  const [uploadingScreenshot, setUploadingScreenshot] = useState(false);
+
+  // Video element refs for optional timestamp seeking
+  const videoRefs = React.useRef<Record<string, HTMLVideoElement | null>>({});
+
+  const jumpToVideo = (offsetSeconds: number, recordingId?: string) => {
+    setActiveSection(3);
+    setPreviewScreenshot(null);
+    setTimeout(() => {
+      let targetVideo: HTMLVideoElement | null = null;
+      if (recordingId && videoRefs.current[recordingId]) {
+        targetVideo = videoRefs.current[recordingId];
+      } else {
+        const keys = Object.keys(videoRefs.current);
+        for (const k of keys) {
+          if (videoRefs.current[k]) {
+            targetVideo = videoRefs.current[k];
+            break;
+          }
+        }
+      }
+      if (targetVideo) {
+        targetVideo.currentTime = Math.max(0, offsetSeconds);
+        targetVideo.play().catch(() => {});
+        targetVideo.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }, 150);
+  };
+
+  // Close screenshot preview modal on Escape
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && previewScreenshot) {
+        setPreviewScreenshot(null);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [previewScreenshot]);
 
   const handleDownloadPDF = async () => {
     if (!data?.case) return;
@@ -403,6 +447,25 @@ export const DossierModal: React.FC<DossierModalProps> = ({
       onRefreshList();
     } catch (err: any) {
       alert(`Recording upload failed: ${err.message}`);
+    }
+  };
+
+  const handleScreenshotUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setUploadingScreenshot(true);
+    try {
+      const caption = file.name.replace(/\.[^/.]+$/, '').replace(/[_-]/g, ' ');
+      await api.uploadScreenshot(caseId, file, 0, caption);
+      await loadCaseRecord();
+      onRefreshList();
+    } catch (err: any) {
+      console.error('Screenshot upload error:', err);
+      alert(`Screenshot upload failed: ${err.message || 'Unknown error'}`);
+    } finally {
+      setUploadingScreenshot(false);
+      e.target.value = '';
     }
   };
 
@@ -787,55 +850,83 @@ export const DossierModal: React.FC<DossierModalProps> = ({
                   data.recordings.map((rec) => (
                     <div
                       key={rec.id}
-                      className="p-4 rounded-xl border border-slate-200 bg-slate-50 flex flex-col md:flex-row md:items-center justify-between gap-4"
+                      className="p-4 rounded-xl border border-slate-200 bg-slate-50 flex flex-col gap-3"
                     >
-                      <div className="space-y-1">
-                        <div className="flex items-center space-x-2">
-                          <span className="font-bold text-xs text-slate-900 font-mono">
-                            REC-{rec.id.substring(0, 8)}
-                          </span>
-                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800">
-                            {rec.status}
-                          </span>
-                          <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-slate-200 text-slate-800">
-                            Duration: {Math.floor(rec.duration_seconds / 60)}M {rec.duration_seconds % 60}S
-                          </span>
+                      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                        <div className="space-y-1">
+                          <div className="flex items-center space-x-2">
+                            <span className="font-bold text-xs text-slate-900 font-mono">
+                              REC-{rec.id.substring(0, 8)}
+                            </span>
+                            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800">
+                              {rec.status}
+                            </span>
+                            <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-slate-200 text-slate-800">
+                              Duration: {Math.floor(rec.duration_seconds / 60)}M {rec.duration_seconds % 60}S
+                            </span>
+                          </div>
+                          {rec.sha256_checksum && (
+                            <div className="text-[11px] text-slate-600 font-mono bg-white px-2 py-1 rounded border border-slate-200 flex items-center space-x-1.5">
+                              <span className="text-slate-400 font-bold">SHA-256:</span>
+                              <span className="truncate max-w-md">{rec.sha256_checksum}</span>
+                            </div>
+                          )}
+                          <div className="text-[11px] text-slate-400">
+                            Started: {new Date(rec.started_at).toLocaleString('en-IN')}
+                          </div>
                         </div>
-                        {rec.sha256_checksum && (
-                          <div className="text-[11px] text-slate-600 font-mono bg-white px-2 py-1 rounded border border-slate-200 flex items-center space-x-1.5">
-                            <span className="text-slate-400 font-bold">SHA-256:</span>
-                            <span className="truncate max-w-md">{rec.sha256_checksum}</span>
+
+                        {/* Video Player */}
+                        {rec.master_storage_path ? (
+                          <div className="flex flex-col sm:flex-row items-center gap-3 w-full md:w-auto">
+                            <video
+                              ref={(el) => { if (el) videoRefs.current[rec.id] = el; }}
+                              controls
+                              preload="metadata"
+                              className="h-32 w-full sm:w-60 rounded-lg bg-black object-contain shadow-xs border border-slate-800"
+                              src={`/storage/${rec.master_storage_path}`}
+                            />
+                            <a
+                              href={`/storage/${rec.master_storage_path}`}
+                              download
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-flex items-center space-x-1 px-2.5 py-1.5 text-[11px] font-semibold text-slate-700 bg-white hover:bg-slate-100 rounded-lg border border-slate-300 shadow-2xs"
+                              title="Open recording file"
+                            >
+                              <ExternalLink className="w-3.5 h-3.5" />
+                              <span>Open</span>
+                            </a>
+                          </div>
+                        ) : (
+                          <div className="text-xs text-amber-600 bg-amber-50 px-3 py-1.5 rounded-lg border border-amber-200">
+                            Processing recording...
                           </div>
                         )}
-                        <div className="text-[11px] text-slate-400">
-                          Started: {new Date(rec.started_at).toLocaleString('en-IN')}
-                        </div>
                       </div>
 
-                      {/* Video Player */}
-                      {rec.master_storage_path ? (
-                        <div className="flex flex-col sm:flex-row items-center gap-3 w-full md:w-auto">
-                          <video
-                            controls
-                            preload="metadata"
-                            className="h-32 w-full sm:w-60 rounded-lg bg-black object-contain shadow-xs border border-slate-800"
-                            src={`/storage/${rec.master_storage_path}`}
-                          />
-                          <a
-                            href={`/storage/${rec.master_storage_path}`}
-                            download
-                            target="_blank"
-                            rel="noreferrer"
-                            className="inline-flex items-center space-x-1 px-2.5 py-1.5 text-[11px] font-semibold text-slate-700 bg-white hover:bg-slate-100 rounded-lg border border-slate-300 shadow-2xs"
-                            title="Open recording file"
-                          >
-                            <ExternalLink className="w-3.5 h-3.5" />
-                            <span>Open</span>
-                          </a>
-                        </div>
-                      ) : (
-                        <div className="text-xs text-amber-600 bg-amber-50 px-3 py-1.5 rounded-lg border border-amber-200">
-                          Processing recording...
+                      {/* Screenshot Moments (Click to view image) */}
+                      {data.screenshots && data.screenshots.length > 0 && (
+                        <div className="mt-1 pt-2.5 border-t border-slate-200 flex flex-col gap-1.5">
+                          <span className="text-[11px] font-bold text-slate-600 flex items-center space-x-1">
+                            <Camera className="w-3 h-3 text-trust-600" />
+                            <span>Captured Screenshot Moments (Click to view image):</span>
+                          </span>
+                          <div className="flex flex-wrap gap-1.5">
+                            {data.screenshots.map((s) => (
+                              <button
+                                key={s.id}
+                                type="button"
+                                onClick={() => setPreviewScreenshot(s)}
+                                className="inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-lg bg-white hover:bg-trust-50 border border-slate-200 hover:border-trust-300 text-[11px] font-mono text-slate-700 hover:text-trust-800 font-semibold shadow-2xs transition-colors"
+                                title={`View screenshot image: ${s.caption || 'Frame snapshot'}`}
+                              >
+                                <Eye className="w-3.5 h-3.5 text-trust-600" />
+                                <span>+{Math.floor(s.timestamp_offset_seconds / 60)}m {s.timestamp_offset_seconds % 60}s</span>
+                                {s.caption && <span className="text-slate-500 font-normal max-w-[140px] truncate">- {s.caption}</span>}
+                              </button>
+                            ))}
+                          </div>
                         </div>
                       )}
                     </div>
@@ -921,12 +1012,26 @@ export const DossierModal: React.FC<DossierModalProps> = ({
           {/* SECTION 5: LIVE VIDEO SCREENSHOTS VAULT */}
           {activeSection === 5 && (
             <div className="bg-white rounded-xl p-5 border border-slate-200 shadow-xs space-y-4">
-              <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
                 <div>
                   <h3 className="text-sm font-bold text-slate-900">Call Screenshots & Frame Gallery</h3>
                   <p className="text-xs text-slate-500">
-                    Snapshots captured live during video interrogation (odometer, vehicle bumper, driver face).
+                    Snapshots captured live during video interrogation (odometer, vehicle bumper, driver face). Click any screenshot to view full image.
                   </p>
+                </div>
+
+                <div className="flex items-center space-x-2">
+                  <label className="cursor-pointer inline-flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold bg-trust-50 hover:bg-trust-100 text-trust-700 rounded-lg border border-trust-200 transition-colors">
+                    <Upload className="w-3.5 h-3.5 text-trust-600" />
+                    <span>{uploadingScreenshot ? 'Uploading...' : 'Upload Screenshot'}</span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={handleScreenshotUpload}
+                      disabled={uploadingScreenshot}
+                      className="hidden"
+                    />
+                  </label>
                 </div>
               </div>
 
@@ -935,20 +1040,66 @@ export const DossierModal: React.FC<DossierModalProps> = ({
                   data.screenshots.map((s) => (
                     <div
                       key={s.id}
-                      className="rounded-xl border border-slate-200 overflow-hidden bg-slate-50 group hover:shadow-md transition-shadow"
+                      className="rounded-xl border border-slate-200 overflow-hidden bg-slate-50 group hover:shadow-md transition-shadow flex flex-col justify-between"
                     >
-                      <div className="aspect-video bg-slate-900 overflow-hidden relative">
+                      {/* Image Thumbnail: Click opens image preview modal */}
+                      <div
+                        onClick={() => setPreviewScreenshot(s)}
+                        className="aspect-video bg-slate-900 overflow-hidden relative cursor-pointer"
+                        title="Click to view full screenshot image"
+                      >
                         <img
                           src={`/storage/${s.storage_path}`}
                           alt={s.caption || 'Call Screenshot'}
                           className="w-full h-full object-cover group-hover:scale-105 transition-transform"
                         />
-                        <div className="absolute bottom-1 right-1 bg-black/60 text-white font-mono text-[9px] px-1 rounded">
-                          +{Math.floor(s.timestamp_offset_seconds / 60)}m {s.timestamp_offset_seconds % 60}s
+                        {/* Hover Overlay with View Image badge */}
+                        <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center space-x-1.5 text-white text-xs font-semibold">
+                          <Eye className="w-4 h-4" />
+                          <span>View Image</span>
+                        </div>
+
+                        {/* Timestamp badge */}
+                        <div className="absolute bottom-1 right-1 bg-black/75 text-white font-mono text-[9px] px-1.5 py-0.5 rounded flex items-center space-x-1">
+                          <Camera className="w-2.5 h-2.5 text-trust-300" />
+                          <span>+{Math.floor(s.timestamp_offset_seconds / 60)}m {s.timestamp_offset_seconds % 60}s</span>
                         </div>
                       </div>
-                      <div className="p-2 text-xs text-slate-700">
-                        <p className="line-clamp-1 font-medium">{s.caption || 'Video frame snapshot'}</p>
+
+                      {/* Card Caption & Action Bar */}
+                      <div className="p-2.5 text-xs text-slate-700 flex flex-col gap-2">
+                        <p className="line-clamp-1 font-medium text-slate-900" title={s.caption || 'Video frame snapshot'}>
+                          {s.caption || 'Video frame snapshot'}
+                        </p>
+
+                        <div className="flex items-center justify-between gap-1 pt-1.5 border-t border-slate-200/70">
+                          {/* Primary: View Image */}
+                          <button
+                            type="button"
+                            onClick={() => setPreviewScreenshot(s)}
+                            className="inline-flex items-center space-x-1 px-2.5 py-1 text-[11px] font-semibold text-trust-700 hover:text-trust-900 bg-trust-50 hover:bg-trust-100 rounded-md transition-colors"
+                            title="Open full-resolution image preview"
+                          >
+                            <Eye className="w-3.5 h-3.5 text-trust-600" />
+                            <span>View Image</span>
+                          </button>
+
+                          {/* Secondary: Seek Video (optional) */}
+                          {data.recordings && data.recordings.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                jumpToVideo(s.timestamp_offset_seconds, s.recording_id);
+                              }}
+                              className="inline-flex items-center space-x-1 px-2 py-1 text-[10px] font-medium text-slate-500 hover:text-indigo-700 hover:bg-indigo-50 rounded-md transition-colors"
+                              title="Scrub video player to this timestamp in Recordings section"
+                            >
+                              <Play className="w-2.5 h-2.5" />
+                              <span>Seek Video</span>
+                            </button>
+                          )}
+                        </div>
                       </div>
                     </div>
                   ))
@@ -1752,6 +1903,113 @@ export const DossierModal: React.FC<DossierModalProps> = ({
               >
                 Cancel
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Lightbox / Sub-Modal: Full High-Resolution Screenshot Viewer */}
+      {previewScreenshot && (
+        <div
+          className="fixed inset-0 z-70 bg-black/80 backdrop-blur-xs flex items-center justify-center p-3 sm:p-6"
+          onClick={() => setPreviewScreenshot(null)}
+        >
+          <div
+            className="bg-slate-900 border border-slate-700 rounded-2xl max-w-4xl w-full max-h-[92vh] flex flex-col shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div className="px-5 py-3.5 bg-slate-800/90 border-b border-slate-700 flex items-center justify-between">
+              <div className="flex items-center space-x-3">
+                <div className="w-8 h-8 rounded-lg bg-trust-600/30 border border-trust-500/40 flex items-center justify-center text-trust-400 shrink-0">
+                  <Camera className="w-4 h-4" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-bold text-white flex items-center space-x-2">
+                    <span className="truncate max-w-md">{previewScreenshot.caption || 'Tele-Verification Screenshot Frame'}</span>
+                    <span className="font-mono text-[10px] px-2 py-0.5 rounded-full bg-trust-900/80 text-trust-300 border border-trust-700/60 shrink-0">
+                      +{Math.floor(previewScreenshot.timestamp_offset_seconds / 60)}m {previewScreenshot.timestamp_offset_seconds % 60}s
+                    </span>
+                  </h4>
+                  <p className="text-[11px] text-slate-400">
+                    Captured: {new Date(previewScreenshot.created_at).toLocaleString('en-IN')}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center space-x-2">
+                <a
+                  href={`/storage/${previewScreenshot.storage_path}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="p-1.5 text-slate-300 hover:text-white hover:bg-slate-700 rounded-lg transition-colors"
+                  title="Open image in full size in new tab"
+                >
+                  <ExternalLink className="w-4 h-4" />
+                </a>
+                <button
+                  onClick={() => setPreviewScreenshot(null)}
+                  className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-700 rounded-lg transition-colors"
+                  title="Close screenshot viewer (Esc)"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Modal Image Body */}
+            <div className="flex-1 bg-black/95 p-3 sm:p-6 flex items-center justify-center overflow-auto min-h-[320px]">
+              <img
+                src={`/storage/${previewScreenshot.storage_path}`}
+                alt={previewScreenshot.caption || 'Call Screenshot'}
+                className="max-h-[65vh] max-w-full object-contain rounded-lg shadow-lg border border-slate-800"
+              />
+            </div>
+
+            {/* Modal Footer Controls */}
+            <div className="px-5 py-3 bg-slate-800 border-t border-slate-700 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+              <div className="text-slate-400 font-mono text-[11px] truncate max-w-md">
+                Path: <span className="text-slate-300">{previewScreenshot.storage_path}</span>
+              </div>
+
+              <div className="flex items-center space-x-2.5">
+                {/* Secondary Action: Jump to video if recordings exist */}
+                {data.recordings && data.recordings.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      jumpToVideo(previewScreenshot.timestamp_offset_seconds, previewScreenshot.recording_id);
+                    }}
+                    className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-indigo-600/80 hover:bg-indigo-600 text-white font-medium transition-colors"
+                    title="Play recorded tele-verification session from this timestamp"
+                  >
+                    <Play className="w-3.5 h-3.5 fill-white" />
+                    <span>
+                      Play Video at {Math.floor(previewScreenshot.timestamp_offset_seconds / 60)}:{(previewScreenshot.timestamp_offset_seconds % 60).toString().padStart(2, '0')}
+                    </span>
+                  </button>
+                )}
+
+                <a
+                  href={`/storage/${previewScreenshot.storage_path}`}
+                  download
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-white font-medium transition-colors"
+                  title="Download screenshot image"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Download Image</span>
+                </a>
+
+                <button
+                  type="button"
+                  onClick={() => setPreviewScreenshot(null)}
+                  className="px-3.5 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 font-semibold transition-colors"
+                >
+                  Close
+                </button>
+              </div>
             </div>
           </div>
         </div>
