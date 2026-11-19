@@ -26,7 +26,7 @@ import {
   Play,
 } from 'lucide-react';
 import { FullCaseRecord, ContactRole, CallDisposition, DocumentCategory, CaseScreenshot } from '../types';
-import { api, getCasePDFDownloadUrl, downloadCasePDF } from '../api/client';
+import { api, getCasePDFDownloadUrl, downloadCasePDF, getStorageUrl } from '../api/client';
 
 interface DossierModalProps {
   caseId: string;
@@ -884,10 +884,10 @@ export const DossierModal: React.FC<DossierModalProps> = ({
                               controls
                               preload="metadata"
                               className="h-32 w-full sm:w-60 rounded-lg bg-black object-contain shadow-xs border border-slate-800"
-                              src={`/storage/${rec.master_storage_path}`}
+                              src={getStorageUrl(rec.master_storage_path)}
                             />
                             <a
-                              href={`/storage/${rec.master_storage_path}`}
+                              href={getStorageUrl(rec.master_storage_path)}
                               download
                               target="_blank"
                               rel="noreferrer"
@@ -991,7 +991,7 @@ export const DossierModal: React.FC<DossierModalProps> = ({
                       </div>
 
                       <a
-                        href={`/storage/${doc.storage_path}`}
+                        href={getStorageUrl(doc.storage_path)}
                         target="_blank"
                         rel="noreferrer"
                         className="p-1.5 text-slate-400 hover:text-slate-800 rounded hover:bg-slate-100"
@@ -1049,7 +1049,7 @@ export const DossierModal: React.FC<DossierModalProps> = ({
                         title="Click to view full screenshot image"
                       >
                         <img
-                          src={`/storage/${s.storage_path}`}
+                          src={getStorageUrl(s.storage_path)}
                           alt={s.caption || 'Call Screenshot'}
                           className="w-full h-full object-cover group-hover:scale-105 transition-transform"
                         />
@@ -1939,7 +1939,7 @@ export const DossierModal: React.FC<DossierModalProps> = ({
 
               <div className="flex items-center space-x-2">
                 <a
-                  href={`/storage/${previewScreenshot.storage_path}`}
+                  href={getStorageUrl(previewScreenshot.storage_path)}
                   target="_blank"
                   rel="noreferrer"
                   className="p-1.5 text-slate-300 hover:text-white hover:bg-slate-700 rounded-lg transition-colors"
@@ -1960,7 +1960,7 @@ export const DossierModal: React.FC<DossierModalProps> = ({
             {/* Modal Image Body */}
             <div className="flex-1 bg-black/95 p-3 sm:p-6 flex items-center justify-center overflow-auto min-h-[320px]">
               <img
-                src={`/storage/${previewScreenshot.storage_path}`}
+                src={getStorageUrl(previewScreenshot.storage_path)}
                 alt={previewScreenshot.caption || 'Call Screenshot'}
                 className="max-h-[65vh] max-w-full object-contain rounded-lg shadow-lg border border-slate-800"
               />
@@ -1991,7 +1991,7 @@ export const DossierModal: React.FC<DossierModalProps> = ({
                 )}
 
                 <a
-                  href={`/storage/${previewScreenshot.storage_path}`}
+                  href={getStorageUrl(previewScreenshot.storage_path)}
                   download
                   target="_blank"
                   rel="noreferrer"

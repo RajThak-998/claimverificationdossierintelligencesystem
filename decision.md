@@ -274,6 +274,25 @@ This document logs all critical architectural, security, design, and implementat
   - Eliminates 0-byte corrupt recordings.
   - Empowers investigators to pause during off-topic dialogue and resume smoothly.
 
+---
+
+### DEC-024: Electron Desktop Wrapper with Always-On-Top Floating Pill & Crash-Safe Disk Streaming
+* **Context**: 
+  - Pure web browsers impose UI boundaries: in-browser elements or Document PiP cannot float framelessly and click-through over external native Windows applications like the WhatsApp Desktop client.
+  - Standard browser screen-sharing triggers modal OS/browser permission popups on each call, causing agent friction.
+  - Extended tele-verification calls (up to 2 hours / 1.2 GB at 720p 1.2 Mbps) risk out-of-memory crashes if video chunks accumulate in browser heap.
+  - Clicking WhatsApp links in the browser risked navigating away or reloading the active investigation tab.
+* **Decision**: 
+  - **Electron Main & Secure Preload**: Wrapped the React application in Electron with `contextIsolation: true` and Windows-optimized deep link handlers. Clicking WhatsApp links (`whatsapp://...`, `https://wa.me/...`) opens the external Windows WhatsApp Desktop app cleanly without navigating or reloading the main dashboard window.
+  - **Zero-Prompt Capture with Loopback Audio**: Configured `session.defaultSession.setDisplayMediaRequestHandler` with `desktopCapturer` and `audio: 'loopback'` to start screen and Windows system audio recording automatically without permission dialogs.
+  - **Frameless Transparent Floating Overlay (`/call-overlay`)**: Spawned a secondary always-on-top `BrowserWindow` with `frame: false`, `transparent: true`, `hasShadow: false`, pinned via `win.setAlwaysOnTop(true, 'screen-saver')` at bottom-center of the primary display. Configured dynamic click-through (`setIgnoreMouseEvents(true, { forward: true })`) over transparent regions so clicks pass through to WhatsApp underneath, while retaining interactivity on `STOP` and `CAPTURE` pills.
+  - **Crash-Safe Disk Streaming**: Implemented `ElectronCaptureService` adhering strictly to `ICaptureService`. Instead of accumulating hours of video in renderer RAM, `MediaRecorder` timeslice chunks are streamed over IPC to Node.js `fs.createWriteStream()` in temp storage while concurrently forwarded to the backend storage handler.
+  - **Packaging**: Configured `electron-builder` targeting Windows NSIS installer.
+* **Rationale**:
+  - Delivers a native desktop experience for field investigators without altering existing React UI components.
+  - 100% resilient evidence capture that survives network drops and unexpected renderer exits.
+
+
 
 
 

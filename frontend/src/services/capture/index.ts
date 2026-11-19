@@ -23,8 +23,8 @@ let captureServiceInstance: ICaptureService | null = null;
  */
 export function getCaptureService(): ICaptureService {
   if (!captureServiceInstance) {
-    if (typeof window !== 'undefined' && (window as any).electronAPI?.capture) {
-      captureServiceInstance = new ElectronCaptureService((window as any).electronAPI.capture);
+    if (typeof window !== 'undefined' && ((window as any).electronAPI?.isElectron || (window as any).electronAPI)) {
+      captureServiceInstance = ElectronCaptureService.getInstance();
     } else {
       captureServiceInstance = WebCaptureService.getInstance();
     }

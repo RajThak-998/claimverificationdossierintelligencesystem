@@ -1,4 +1,19 @@
-const BASE_URL = '/api/v1';
+// Auto-detect backend host: When running inside Electron or via file:// protocol,
+// default to http://localhost:8080 (or VITE_API_URL if configured).
+export const API_HOST =
+  (typeof window !== 'undefined' && ((window as any).electronAPI || window.location.protocol === 'file:'))
+    ? ((import.meta as any).env?.VITE_API_URL || 'http://localhost:8080')
+    : ((import.meta as any).env?.VITE_API_URL || '');
+
+export const BASE_URL = `${API_HOST}/api/v1`;
+
+export function getStorageUrl(path?: string | null): string {
+  if (!path) return '';
+  if (path.startsWith('http://') || path.startsWith('https://')) return path;
+  const clean = path.startsWith('/') ? path : `/${path}`;
+  const base = clean.startsWith('/storage') ? clean : `/storage${clean}`;
+  return `${API_HOST}${base}`;
+}
 
 export function getStoredToken(): string | null {
   return localStorage.getItem('token');

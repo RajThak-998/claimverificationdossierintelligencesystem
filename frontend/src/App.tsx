@@ -65,10 +65,17 @@ export const App: React.FC = () => {
         contactId,
       });
 
-      // 4. Open WhatsApp in a new tab so the main web app tab NEVER reloads or loses its active MediaStream
+      // 4. Open Windows WhatsApp Desktop app cleanly without reloading or navigating main window
       if (contactPhone) {
         const cleanPhone = contactPhone.replace(/[^0-9]/g, '');
-        window.open(`https://web.whatsapp.com/send?phone=${cleanPhone}`, '_blank');
+        const electronAPI = (window as any).electronAPI;
+        if (electronAPI?.openExternal) {
+          electronAPI.openExternal(`whatsapp://send?phone=${cleanPhone}`).catch(() => {
+            electronAPI.openExternal(`https://web.whatsapp.com/send?phone=${cleanPhone}`);
+          });
+        } else {
+          window.open(`https://web.whatsapp.com/send?phone=${cleanPhone}`, '_blank');
+        }
       }
     } catch (err: any) {
       console.error('Tele-verification start error:', err);
