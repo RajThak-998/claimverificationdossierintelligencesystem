@@ -3,7 +3,6 @@ import { Shield, Lock, Mail, ArrowRight, UserCheck, AlertCircle } from 'lucide-r
 import { NavigationBar } from './components/NavigationBar';
 import { CasesVault } from './components/CasesVault';
 import { DossierModal } from './components/DossierModal';
-import { SeparateCallWidgets } from './components/SeparateCallWidgets';
 import { AddCaseModal } from './components/AddCaseModal';
 import { BulkImportModal } from './components/BulkImportModal';
 import { AgentHub } from './components/AgentHub';
@@ -12,6 +11,7 @@ import { InsurerPortal } from './components/InsurerPortal';
 import { PublicVerificationView } from './components/PublicVerificationView';
 import { api, getStoredToken, setStoredToken, clearStoredToken } from './api/client';
 import { UserRole } from './types';
+import { getCaptureService, useCaptureService } from './services/capture';
 
 export const App: React.FC = () => {
   const [token, setToken] = useState<string | null>(getStoredToken());
@@ -27,30 +27,55 @@ export const App: React.FC = () => {
   const [showImportModal, setShowImportModal] = useState<boolean>(false);
   const [refreshTrigger, setRefreshTrigger] = useState<number>(0);
 
-  // Active Tele-Verification session (Separate Buttons + WhatsApp)
-  const [activeCallSession, setActiveCallSession] = useState<{
-    caseId: string;
-    caseNumber?: string;
-    contactPhone?: string;
-    contactName?: string;
-  } | null>(null);
+  const capture = useCaptureService();
 
-  const handleStartTeleVerification = (caseId: string, _contactId?: string, contactPhone?: string, caseNumber?: string, contactName?: string) => {
-    // 1. Mount floating buttons FIRST so PiP window opens immediately
-    setActiveCallSession({
-      caseId,
-      caseNumber,
-      contactPhone,
-      contactName,
+  // Auto-refresh case listings whenever a recording session finishes
+  useEffect(() => {
+    let wasRecording = false;
+    const unsub = getCaptureService().subscribe((state) => {
+      if (wasRecording && !state.isRecording) {
+        setRefreshTrigger((prev) => prev + 1);
+      }
+      wasRecording = state.isRecording;
     });
+    return unsub;
+  }, []);
 
-    // 2. Redirect to WhatsApp with contact's phone (opens in new tab)
-    if (contactPhone) {
-      const cleanPhone = contactPhone.replace(/[^0-9]/g, '');
-      // Small delay to ensure PiP window is requested before tab switch
-      setTimeout(() => {
+  const handleStartTeleVerification = async (
+    caseId: string,
+    contactId?: string,
+    contactPhone?: string,
+    caseNumber?: string,
+    contactName?: string
+  ) => {
+    try {
+      const captureService = getCaptureService();
+
+      // 1. Ensure capture session is active (session-persistent: prompts once per session)
+      await captureService.initSession();
+
+      // 2. Launch the floating controls (/call-overlay) via PiP or compact window
+      await captureService.launchOverlay();
+
+      // 3. Start memory-safe recording
+      await captureService.startRecording(caseId, {
+        caseNumber,
+        contactPhone,
+        contactName,
+        contactId,
+      });
+
+      // 4. Open WhatsApp in a new tab so the main web app tab NEVER reloads or loses its active MediaStream
+      if (contactPhone) {
+        const cleanPhone = contactPhone.replace(/[^0-9]/g, '');
         window.open(`https://web.whatsapp.com/send?phone=${cleanPhone}`, '_blank');
-      }, 300);
+      }
+    } catch (err: any) {
+      console.error('Tele-verification start error:', err);
+      const msg = err.message || '';
+      if (!msg.includes('denied') && !msg.includes('cancelled') && !msg.includes('Permission')) {
+        alert(`Could not start tele-verification: ${msg || 'Screen capture permission failed'}`);
+      }
     }
   };
 
@@ -324,18 +349,62 @@ export const App: React.FC = () => {
         />
       )}
 
-      {/* Always-On-Top OS PiP Floating Buttons: [● REC/■ STOP/⏸ PAUSE] and [📷 CAPTURE] */}
-      {activeCallSession && (
-        <SeparateCallWidgets
-          caseId={activeCallSession.caseId}
-          caseNumber={activeCallSession.caseNumber}
-          contactPhone={activeCallSession.contactPhone}
-          contactName={activeCallSession.contactName}
-          onClose={() => setActiveCallSession(null)}
-          onRecordingSaved={() => {
-            setRefreshTrigger((prev) => prev + 1);
-          }}
-        />
+      {/* Floating Call Bar Dock (Main Tab fallback & quick-access controls) */}
+      {(capture.isRecording || capture.hasActiveStream) && (
+        <div className="fixed bottom-4 right-4 z-50">
+          <div className="flex items-center space-x-2 px-3 py-2 rounded-full bg-slate-900/95 backdrop-blur-md border border-slate-700 shadow-2xl text-white text-xs">
+            {capture.isRecording ? (
+              <>
+                <div className="flex items-center space-x-1.5 px-2 py-0.5 rounded-full bg-rose-950/80 text-rose-300 font-bold border border-rose-800">
+                  <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse" />
+                  <span>REC</span>
+                  <span className="font-mono font-normal">
+                    {Math.floor(capture.elapsedSeconds / 60).toString().padStart(2, '0')}:
+                    {(capture.elapsedSeconds % 60).toString().padStart(2, '0')}
+                  </span>
+                </div>
+                <button
+                  onClick={() => capture.takeScreenshot()}
+                  className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 rounded-full font-bold text-white transition-colors flex items-center space-x-1 shadow-sm"
+                  title="Capture screenshot"
+                >
+                  <span>CAPTURE</span>
+                  {capture.screenshotCount > 0 && (
+                    <span className="text-[10px] bg-black/30 px-1.5 py-0.2 rounded-full">
+                      {capture.screenshotCount}
+                    </span>
+                  )}
+                </button>
+                <button
+                  onClick={() => capture.stopRecording()}
+                  className="px-2.5 py-1 bg-rose-600 hover:bg-rose-500 rounded-full font-bold text-white transition-colors shadow-sm"
+                  title="Stop recording"
+                >
+                  STOP
+                </button>
+              </>
+            ) : (
+              <div className="flex items-center space-x-2 text-[11px] text-slate-300">
+                <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                <span>Screen Capture Active (Session Persistent)</span>
+                <button
+                  onClick={() => capture.endSession()}
+                  className="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white rounded text-[10px]"
+                >
+                  End Stream
+                </button>
+              </div>
+            )}
+
+            <button
+              onClick={() => capture.launchOverlay()}
+              className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-full text-[11px] border border-slate-700 transition-colors"
+              title="Pop out floating call overlay window"
+            >
+              Pop-out Overlay
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );
