@@ -9,7 +9,7 @@ import { AgentHub } from './components/AgentHub';
 import { CommercialMetrics } from './components/CommercialMetrics';
 import { InsurerPortal } from './components/InsurerPortal';
 import { PublicVerificationView } from './components/PublicVerificationView';
-import { api, getStoredToken, setStoredToken, clearStoredToken } from './api/client';
+import { api, getStoredToken, setStoredToken, clearStoredToken, getApiHost, setCustomApiHost } from './api/client';
 import { UserRole } from './types';
 import { getCaptureService, useCaptureService } from './services/capture';
 
@@ -51,21 +51,18 @@ export const App: React.FC = () => {
     try {
       const captureService = getCaptureService();
 
-      // 1. Ensure capture session is active (session-persistent: prompts once per session)
-      await captureService.initSession();
-
-      // 2. Launch the floating controls (/call-overlay) via PiP or compact window
-      await captureService.launchOverlay();
-
-      // 3. Start memory-safe recording
-      await captureService.startRecording(caseId, {
+      // 1. Prepare session and associate case metadata without auto-starting recording
+      captureService.prepareSession(caseId, {
         caseNumber,
         contactPhone,
         contactName,
         contactId,
       });
 
-      // 4. Open Windows WhatsApp Desktop app cleanly without reloading or navigating main window
+      // 2. Launch the floating controls (/call-overlay) in ready state [ ● REC ]
+      await captureService.launchOverlay();
+
+      // 3. Open Windows WhatsApp Desktop app cleanly without reloading or navigating main window
       if (contactPhone) {
         const cleanPhone = contactPhone.replace(/[^0-9]/g, '');
         const electronAPI = (window as any).electronAPI;
@@ -277,6 +274,26 @@ export const App: React.FC = () => {
                   <div className="text-[10px] text-slate-400">Client Insurer Portal</div>
                 </button>
               </div>
+            </div>
+
+            {/* Backend Server Connection Indicator & Custom Cloud URL Override */}
+            <div className="pt-2 border-t border-slate-700/60 text-center">
+              <button
+                type="button"
+                onClick={() => {
+                  const current = getApiHost();
+                  const nextUrl = window.prompt('Enter Backend API Host URL (Localhost or Cloud Backend):', current);
+                  if (nextUrl !== null && nextUrl.trim() !== '') {
+                    setCustomApiHost(nextUrl.trim());
+                    window.location.reload();
+                  }
+                }}
+                className="text-[11px] text-slate-400 hover:text-trust-400 inline-flex items-center gap-1 transition-colors cursor-pointer"
+                title="Click to configure cloud backend endpoint"
+              >
+                <span>🌐 Server:</span>
+                <span className="font-mono text-slate-300 underline">{getApiHost()}</span>
+              </button>
             </div>
           </div>
         </div>

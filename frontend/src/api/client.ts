@@ -1,18 +1,35 @@
-// Auto-detect backend host: When running inside Electron or via file:// protocol,
-// default to http://localhost:8080 (or VITE_API_URL if configured).
-export const API_HOST =
-  (typeof window !== 'undefined' && ((window as any).electronAPI || window.location.protocol === 'file:'))
-    ? ((import.meta as any).env?.VITE_API_URL || 'http://localhost:8080')
-    : ((import.meta as any).env?.VITE_API_URL || '');
+// Auto-detect backend host: Defaults to VITE_API_URL, localStorage override, or localhost:8080
+export function getApiHost(): string {
+  if (typeof window !== 'undefined') {
+    const custom = localStorage.getItem('custom_api_host');
+    if (custom) return custom.replace(/\/+$/, '');
+  }
+  return (import.meta as any).env?.VITE_API_URL || 'http://localhost:8080';
+}
 
-export const BASE_URL = `${API_HOST}/api/v1`;
+export function setCustomApiHost(host: string): void {
+  if (typeof window !== 'undefined') {
+    if (!host || host === 'http://localhost:8080') {
+      localStorage.removeItem('custom_api_host');
+    } else {
+      localStorage.setItem('custom_api_host', host.replace(/\/+$/, ''));
+    }
+  }
+}
+
+export function getBaseUrl(): string {
+  return `${getApiHost()}/api/v1`;
+}
+
+export const API_HOST = getApiHost();
+export const BASE_URL = `${getApiHost()}/api/v1`;
 
 export function getStorageUrl(path?: string | null): string {
   if (!path) return '';
   if (path.startsWith('http://') || path.startsWith('https://')) return path;
   const clean = path.startsWith('/') ? path : `/${path}`;
   const base = clean.startsWith('/storage') ? clean : `/storage${clean}`;
-  return `${API_HOST}${base}`;
+  return `${getApiHost()}${base}`;
 }
 
 export function getStoredToken(): string | null {
@@ -39,7 +56,7 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
     headers.set('Content-Type', 'application/json');
   }
 
-  const response = await fetch(`${BASE_URL}${endpoint}`, {
+  const response = await fetch(`${getBaseUrl()}${endpoint}`, {
     ...options,
     headers,
   });
@@ -223,7 +240,7 @@ export function getCasePDFDownloadUrl(caseId: string, inline: boolean = false): 
   if (token) params.set('token', token);
   if (inline) params.set('inline', 'true');
   const qs = params.toString();
-  return `${BASE_URL}/cases/${caseId}/pdf/download${qs ? `?${qs}` : ''}`;
+  return `${getBaseUrl()}/cases/${caseId}/pdf/download${qs ? `?${qs}` : ''}`;
 }
 
 export async function downloadCasePDF(caseId: string, caseNumber?: string): Promise<void> {
@@ -232,7 +249,7 @@ export async function downloadCasePDF(caseId: string, caseNumber?: string): Prom
   if (token) {
     headers.set('Authorization', `Bearer ${token}`);
   }
-  const response = await fetch(`${BASE_URL}/cases/${caseId}/pdf/download`, {
+  const response = await fetch(`${getBaseUrl()}/cases/${caseId}/pdf/download`, {
     headers,
   });
   if (!response.ok) {

@@ -55,8 +55,10 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({ onStop, onCapture, onC
   );
 
   // Dragging refs
-  const dragRecRef = useRef({ isDragging: false, startX: 0, startY: 0, posX: 0, posY: 0 });
-  const dragCapRef = useRef({ isDragging: false, startX: 0, startY: 0, posX: 0, posY: 0 });
+  const dragRecRef = useRef({ isDragging: false, startX: 0, startY: 0, posX: 0, posY: 0, curX: 0, curY: 0 });
+  const dragCapRef = useRef({ isDragging: false, startX: 0, startY: 0, posX: 0, posY: 0, curX: 0, curY: 0 });
+  const recElRef = useRef<HTMLDivElement | null>(null);
+  const capElRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     // 1. Direct service subscription
@@ -151,36 +153,62 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({ onStop, onCapture, onC
     bridge.destroy();
   };
 
-  const handleStop = async (e?: React.MouseEvent) => {
+  const handleToggleRecord = async (e?: React.MouseEvent) => {
     e?.stopPropagation();
     if (stopping) return;
-    setStopping(true);
 
-    if (onStop) {
-      onStop();
-      return;
-    }
+    if (state.isRecording) {
+      setStopping(true);
+      if (onStop) {
+        onStop();
+        return;
+      }
 
-    const electronAPI = (window as any).electronAPI;
-    if (electronAPI?.overlay?.sendCommand) {
-      electronAPI.overlay.sendCommand('CMD_STOP_RECORDING');
-      setStopping(false);
-      return;
-    }
-
-    try {
-      const service = getCaptureService();
-      if (service.getState().isRecording) {
-        await service.stopRecording();
+      const electronAPI = (window as any).electronAPI;
+      if (electronAPI?.overlay?.sendCommand) {
+        electronAPI.overlay.sendCommand('CMD_STOP_RECORDING');
         setStopping(false);
         return;
       }
-    } catch {}
 
-    const bridge = new CaptureBroadcastBridge();
-    bridge.postMessage({ type: 'CMD_STOP_RECORDING' });
-    bridge.destroy();
-    setStopping(false);
+      try {
+        const service = getCaptureService();
+        if (service.getState().isRecording) {
+          await service.stopRecording();
+          setStopping(false);
+          return;
+        }
+      } catch {}
+
+      const bridge = new CaptureBroadcastBridge();
+      bridge.postMessage({ type: 'CMD_STOP_RECORDING' });
+      bridge.destroy();
+      setStopping(false);
+    } else {
+      // Manual start recording
+      const electronAPI = (window as any).electronAPI;
+      if (electronAPI?.overlay?.sendCommand) {
+        electronAPI.overlay.sendCommand('CMD_START_RECORDING');
+        return;
+      }
+
+      try {
+        const service = getCaptureService();
+        const curState = service.getState();
+        if (curState.caseId) {
+          await service.startRecording(curState.caseId, {
+            caseNumber: curState.caseNumber || undefined,
+            contactPhone: curState.contactPhone || undefined,
+            contactName: curState.contactName || undefined,
+          });
+          return;
+        }
+      } catch {}
+
+      const bridge = new CaptureBroadcastBridge();
+      bridge.postMessage({ type: 'CMD_START_RECORDING' });
+      bridge.destroy();
+    }
   };
 
   const handleClose = (e?: React.MouseEvent) => {
@@ -204,11 +232,10 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({ onStop, onCapture, onC
   };
 
   // ═══════════════════════════════════════════════════════════════════════
-  // Pointer Dragging Mechanics (Fluid & Bounds-Constrained)
+  // Fluid Pointer Dragging (Direct DOM Updates to Eliminate React Lag)
   // ═══════════════════════════════════════════════════════════════════════
 
   const handlePointerDownRec = (e: React.PointerEvent<HTMLDivElement>) => {
-    // If clicking a button directly, don't drag
     if ((e.target as HTMLElement)?.closest('button')) return;
     e.currentTarget.setPointerCapture(e.pointerId);
     dragRecRef.current = {
@@ -217,6 +244,8 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({ onStop, onCapture, onC
       startY: e.clientY,
       posX: posRec.x,
       posY: posRec.y,
+      curX: posRec.x,
+      curY: posRec.y,
     };
   };
 
@@ -224,9 +253,14 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({ onStop, onCapture, onC
     if (!dragRecRef.current.isDragging) return;
     const dx = e.clientX - dragRecRef.current.startX;
     const dy = e.clientY - dragRecRef.current.startY;
-    const nextX = Math.max(10, Math.min(window.innerWidth - 180, dragRecRef.current.posX + dx));
-    const nextY = Math.max(10, Math.min(window.innerHeight - 50, dragRecRef.current.posY + dy));
-    setPosRec({ x: nextX, y: nextY });
+    const nextX = Math.max(8, Math.min(window.innerWidth - 180, dragRecRef.current.posX + dx));
+    const nextY = Math.max(8, Math.min(window.innerHeight - 56, dragRecRef.current.posY + dy));
+    dragRecRef.current.curX = nextX;
+    dragRecRef.current.curY = nextY;
+    if (recElRef.current) {
+      recElRef.current.style.left = `${nextX}px`;
+      recElRef.current.style.top = `${nextY}px`;
+    }
   };
 
   const handlePointerUpRec = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -235,7 +269,9 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({ onStop, onCapture, onC
       try {
         e.currentTarget.releasePointerCapture(e.pointerId);
       } catch {}
-      localStorage.setItem('overlay_rec_pill_pos', JSON.stringify(posRec));
+      const finalPos = { x: dragRecRef.current.curX, y: dragRecRef.current.curY };
+      setPosRec(finalPos);
+      localStorage.setItem('overlay_rec_pill_pos', JSON.stringify(finalPos));
     }
   };
 
@@ -248,6 +284,8 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({ onStop, onCapture, onC
       startY: e.clientY,
       posX: posCap.x,
       posY: posCap.y,
+      curX: posCap.x,
+      curY: posCap.y,
     };
   };
 
@@ -255,9 +293,14 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({ onStop, onCapture, onC
     if (!dragCapRef.current.isDragging) return;
     const dx = e.clientX - dragCapRef.current.startX;
     const dy = e.clientY - dragCapRef.current.startY;
-    const nextX = Math.max(10, Math.min(window.innerWidth - 180, dragCapRef.current.posX + dx));
-    const nextY = Math.max(10, Math.min(window.innerHeight - 50, dragCapRef.current.posY + dy));
-    setPosCap({ x: nextX, y: nextY });
+    const nextX = Math.max(8, Math.min(window.innerWidth - 160, dragCapRef.current.posX + dx));
+    const nextY = Math.max(8, Math.min(window.innerHeight - 56, dragCapRef.current.posY + dy));
+    dragCapRef.current.curX = nextX;
+    dragCapRef.current.curY = nextY;
+    if (capElRef.current) {
+      capElRef.current.style.left = `${nextX}px`;
+      capElRef.current.style.top = `${nextY}px`;
+    }
   };
 
   const handlePointerUpCap = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -266,16 +309,19 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({ onStop, onCapture, onC
       try {
         e.currentTarget.releasePointerCapture(e.pointerId);
       } catch {}
-      localStorage.setItem('overlay_cap_pill_pos', JSON.stringify(posCap));
+      const finalPos = { x: dragCapRef.current.curX, y: dragCapRef.current.curY };
+      setPosCap(finalPos);
+      localStorage.setItem('overlay_cap_pill_pos', JSON.stringify(finalPos));
     }
   };
 
   return (
     <>
       {/* ═════════════════════════════════════════════════════════════════ */}
-      {/* SEPARATE BUTTON 1: MINIMAL RECORDING / STOP PILL                  */}
+      {/* SEPARATE BUTTON 1: MINIMAL MATTE RECORDING / STOP PILL            */}
       {/* ═════════════════════════════════════════════════════════════════ */}
       <div
+        ref={recElRef}
         id="call-overlay-rec-pill"
         data-overlay-interactive="true"
         onPointerDown={handlePointerDownRec}
@@ -287,22 +333,22 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({ onStop, onCapture, onC
           top: `${posRec.y}px`,
           touchAction: 'none',
         }}
-        className="z-[99999] inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-full bg-slate-900/90 backdrop-blur-md border border-slate-700/80 shadow-2xl text-white select-none cursor-grab active:cursor-grabbing transition-shadow hover:shadow-rose-950/30 hover:border-slate-600"
+        className="z-[99999] inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-full bg-zinc-900/95 backdrop-blur-md border border-zinc-700/60 shadow-xl shadow-black/50 text-white select-none cursor-grab active:cursor-grabbing hover:border-zinc-500/70 transition-colors"
         title="Drag anywhere on your screen"
       >
         {/* Subtle Grip Drag Indicator */}
-        <GripVertical className="w-3.5 h-3.5 text-slate-500 hover:text-slate-300 pointer-events-none shrink-0" />
+        <GripVertical className="w-3.5 h-3.5 text-zinc-500 hover:text-zinc-300 pointer-events-none shrink-0" />
 
-        {/* Action Button: STOP or REC */}
+        {/* Action Button: REC / STOP */}
         <button
-          onClick={handleStop}
-          disabled={stopping || !state.isRecording}
-          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full font-bold text-xs tracking-wider transition-all shadow-md active:scale-95 cursor-pointer ${
+          onClick={handleToggleRecord}
+          disabled={stopping}
+          className={`flex items-center gap-1.5 px-3 py-1 rounded-full font-semibold text-xs tracking-wide transition-all shadow-sm active:scale-95 cursor-pointer ${
             state.isRecording
-              ? 'bg-rose-600 hover:bg-rose-500 text-white shadow-rose-900/50'
-              : 'bg-slate-800 text-slate-400 border border-slate-700'
+              ? 'bg-rose-600 hover:bg-rose-500 text-white shadow-rose-950/40'
+              : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-600/50 hover:text-white'
           }`}
-          title={state.isRecording ? 'Click to stop and save call recording' : 'Not currently recording'}
+          title={state.isRecording ? 'Click to stop and save call recording' : 'Click to start call recording'}
         >
           {state.isRecording ? (
             <>
@@ -321,9 +367,9 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({ onStop, onCapture, onC
           )}
         </button>
 
-        {/* Minimal Monospaced Timer Pill */}
+        {/* Minimal Monospaced Timer */}
         {state.isRecording && (
-          <span className="font-mono text-xs font-bold text-rose-200 bg-rose-950/80 border border-rose-500/40 px-2 py-0.5 rounded-full">
+          <span className="font-mono text-xs font-bold text-rose-300 bg-rose-950/70 border border-rose-800/50 px-2 py-0.5 rounded-full">
             {formatTimer(state.elapsedSeconds)}
           </span>
         )}
@@ -331,7 +377,7 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({ onStop, onCapture, onC
         {/* Minimal Close Button */}
         <button
           onClick={handleClose}
-          className="p-1 hover:text-rose-400 text-slate-500 hover:bg-slate-800/80 rounded-full transition-colors cursor-pointer"
+          className="p-1 hover:text-rose-400 text-zinc-500 hover:bg-zinc-800/80 rounded-full transition-colors cursor-pointer"
           title="Hide widget"
         >
           <X className="w-3 h-3" />
@@ -339,9 +385,10 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({ onStop, onCapture, onC
       </div>
 
       {/* ═════════════════════════════════════════════════════════════════ */}
-      {/* SEPARATE BUTTON 2: MINIMAL SCREENSHOT CAPTURE PILL               */}
+      {/* SEPARATE BUTTON 2: MINIMAL MATTE SCREENSHOT CAPTURE PILL         */}
       {/* ═════════════════════════════════════════════════════════════════ */}
       <div
+        ref={capElRef}
         id="call-overlay-cap-pill"
         data-overlay-interactive="true"
         onPointerDown={handlePointerDownCap}
@@ -353,35 +400,28 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({ onStop, onCapture, onC
           top: `${posCap.y}px`,
           touchAction: 'none',
         }}
-        className={`z-[99999] inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-full bg-slate-900/90 backdrop-blur-md border border-slate-700/80 shadow-2xl text-white select-none cursor-grab active:cursor-grabbing transition-all hover:shadow-emerald-950/30 hover:border-slate-600 ${
-          capFlash ? 'ring-4 ring-emerald-400 scale-105' : ''
+        className={`z-[99999] inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-full bg-zinc-900/95 backdrop-blur-md border border-zinc-700/60 shadow-xl shadow-black/50 text-white select-none cursor-grab active:cursor-grabbing hover:border-zinc-500/70 transition-all ${
+          capFlash ? 'ring-2 ring-emerald-400 scale-105' : ''
         }`}
         title="Drag anywhere on your screen"
       >
         {/* Subtle Grip Drag Indicator */}
-        <GripVertical className="w-3.5 h-3.5 text-slate-500 hover:text-slate-300 pointer-events-none shrink-0" />
+        <GripVertical className="w-3.5 h-3.5 text-zinc-500 hover:text-zinc-300 pointer-events-none shrink-0" />
 
         {/* Action Button: CAPTURE */}
         <button
           onClick={handleCapture}
-          className="flex items-center gap-1.5 px-3 py-1 rounded-full font-bold text-xs tracking-wider transition-all shadow-md active:scale-95 bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-900/40 cursor-pointer"
-          title="Instant screenshot frame grab (tagged with exact timestamp)"
+          className="flex items-center gap-1.5 px-3 py-1 rounded-full font-semibold text-xs tracking-wide transition-all shadow-sm active:scale-95 bg-emerald-700 hover:bg-emerald-600 text-white cursor-pointer shadow-emerald-950/40"
+          title="Instant screenshot frame grab"
         >
           <Camera className="w-3.5 h-3.5" />
           <span>CAPTURE</span>
         </button>
 
-        {/* Screenshot Count Badge */}
+        {/* Minimal Numeric Screenshot Badge */}
         {state.screenshotCount > 0 && (
-          <span className="font-mono text-[10px] bg-emerald-950/80 text-emerald-300 border border-emerald-500/40 px-1.5 py-0.5 rounded-full font-bold">
-            {state.screenshotCount}
-          </span>
-        )}
-
-        {/* Instant Toast Feedback */}
-        {toast && (
-          <span className="text-[10px] font-mono text-emerald-300 bg-emerald-950/90 border border-emerald-500/40 px-2 py-0.5 rounded-full animate-fade-in truncate max-w-[120px]">
-            {toast}
+          <span className="font-mono text-xs font-bold text-emerald-300 bg-emerald-950/80 border border-emerald-500/40 px-2 py-0.5 rounded-full shadow-inner animate-fade-in">
+            #{state.screenshotCount}
           </span>
         )}
       </div>

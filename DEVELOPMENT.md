@@ -63,7 +63,7 @@ npm run electron
 
 ## 📦 4. Compiling & Packaging the Windows Executable (`.exe`)
 
-When you are ready to produce the standalone Windows executable and installer for release or teammate testing:
+When you are ready to produce the standalone Windows executable and installer for release, teammate testing, or client delivery:
 
 ```bash
 cd frontend
@@ -71,24 +71,50 @@ cd frontend
 # Step 1: Typecheck & build the React frontend with relative assets
 npm run build
 
-# Step 2: Package Windows executable & NSIS installer
+# Step 2: Package Windows standalone single executable & installer
 npm run electron:build
 ```
 
 ### 📂 Build Outputs (`frontend/release/`)
-Once packaging finishes (~30–60 seconds), you will find:
-1. **Portable Unpacked Executable (Double-click to run immediately without installation):**
+Once packaging finishes (~45–60 seconds), you will find:
+1. **Single Standalone Executable (Zero Installation Required — Deliverable to Clients):**
    ```
-   frontend/release/win-unpacked/Claim Verification Intelligence.exe
+   frontend/release/Claim Verification Intelligence-Standalone.exe
    ```
+   * *This is a single self-contained `.exe` file that clients can run directly on any Windows PC with no setup wizard or installer.*
 2. **Standard Windows NSIS Installer (.exe):**
    ```
    frontend/release/Claim Verification Intelligence Setup 1.0.0.exe
    ```
+3. **Unpacked Development Folder:**
+   ```
+   frontend/release/win-unpacked/Claim Verification Intelligence.exe
+   ```
 
 ---
 
-## 🔑 5. Pre-Seeded Test Accounts
+## ☁️ 5. Connecting to a Hosted Cloud Backend
+
+The Windows app is built to connect effortlessly to either a local backend or your hosted cloud production backend:
+
+### Option A: 1-Click Runtime Configuration (No Recompilation Needed!)
+1. Open the application.
+2. On the Login Screen, click the **`🌐 Server: http://localhost:8080`** button at the bottom.
+3. Paste your cloud backend URL (e.g. `https://claims-api.yourdomain.com`).
+4. The app refreshes and immediately routes all API calls, WhatsApp tele-verification sessions, chunk uploads, and dossier downloads through your cloud server!
+
+### Option B: Build-Time Cloud Bake
+To bake your cloud backend URL permanently into the `.exe` binary:
+```bash
+cd frontend
+$env:VITE_API_URL="https://claims-api.yourdomain.com"
+npm run build
+npm run electron:build
+```
+
+---
+
+## 🔑 6. Pre-Seeded Test Accounts
 
 The local database comes pre-seeded with 4 test personas:
 
@@ -103,11 +129,19 @@ The local database comes pre-seeded with 4 test personas:
 
 ---
 
-## 🛠️ 6. Quick Troubleshooting
+## 🛠️ 7. Operational Architecture & Troubleshooting
 
+* **Floating Controls & Background WhatsApp Window:**  
+  The floating pill overlay uses native Windows `type: 'toolbar'` (`WS_EX_TOOLWINDOW`) with `focusable: false`. This ensures that dragging or clicking the floating pills never minimizes or de-activates the background WhatsApp Desktop window.
+* **Manual Recording Control:**  
+  Clicking "WhatsApp Call" opens WhatsApp Desktop and brings up the floating controls in ready state `[ ● REC ]`. Recording starts only when the agent explicitly clicks `● REC`, and stops when clicking `■ STOP`.
+* **Zero-Prompt Capture with System Audio:**  
+  Electron's `session.defaultSession.setDisplayMediaRequestHandler` auto-selects the primary screen with Windows loopback system audio (`audio: 'loopback'`).
+* **Instant Numeric Frame Grab Badge:**  
+  Capturing screenshots displays a clean, minimal `#1`, `#2` numeric badge without verbose toast messages.
+* **Legal PDF Dossier Generation via Microsoft Edge / Chrome:**  
+  The Go backend detects Microsoft Edge (`msedge.exe`) or Google Chrome (`chrome.exe`) automatically at standard Windows locations (`C:\Program Files (x86)\Microsoft\Edge\...`) and compiles genuine, certified PDFs.
+* **WebM Video Seeking & Chunk Stitching:**  
+  The backend stitches 5-second WebM chunks. When `ffmpeg.exe` is available in `%PATH%` or `backend/bin/ffmpeg.exe`, it runs stream copy (`-c copy`) to inject proper WebM Cues headers, enabling seamless timeline seeking.
 * **Blank White Screen in Packaged App:**  
-  Always run `npm run build` inside `frontend/` before `npm run electron:build` so `dist/index.html` has relative `./assets/...` paths.
-* **Backend Connection / Network Errors:**  
-  Make sure `motor-api.exe` (or `go run ./cmd/api`) is running in the background on port `8080`.
-* **WhatsApp Call Deep Links:**  
-  Clicking WhatsApp links in the app triggers `whatsapp://...` directly to the native Windows WhatsApp Desktop app without navigating or reloading the main dashboard window.
+  Always run `npm run build` inside `frontend/` before `npm run electron:build` so `dist/index.html` has relative `./assets/...` paths (`base: './'`).

@@ -41,6 +41,8 @@ export class WebCaptureService implements ICaptureService {
 
   // Cross-Window Bridge
   private bridge: CaptureBroadcastBridge;
+  private pendingCaseId: string | null = null;
+  private pendingOptions?: RecordingOptions;
 
   // State
   private state: CaptureState = {
@@ -68,6 +70,14 @@ export class WebCaptureService implements ICaptureService {
     // Listen to commands from the standalone /call-overlay route
     this.bridge.onMessage((msg) => {
       switch (msg.type) {
+        case 'CMD_START_RECORDING':
+          const targetCaseId = this.pendingCaseId || this.state.caseId;
+          if (targetCaseId) {
+            this.startRecording(targetCaseId, this.pendingOptions).catch((err) => {
+              console.error('Bridge start recording error:', err);
+            });
+          }
+          break;
         case 'CMD_TAKE_SCREENSHOT':
           this.takeScreenshot(msg.caption).catch((err) => {
             console.error('Bridge screenshot error:', err);
@@ -131,8 +141,20 @@ export class WebCaptureService implements ICaptureService {
   }
 
   // ═══════════════════════════════════════════════════════════════════════
-  // 1. Session-Persistent Screen Capture
+  // 1. Session Preparation & Screen Capture
   // ═══════════════════════════════════════════════════════════════════════
+
+  public prepareSession(caseId: string, options?: RecordingOptions): void {
+    this.pendingCaseId = caseId;
+    this.pendingOptions = options;
+    this.updateState({
+      caseId,
+      caseNumber: options?.caseNumber || null,
+      contactPhone: options?.contactPhone || null,
+      contactName: options?.contactName || null,
+      error: null,
+    });
+  }
 
   public async initSession(): Promise<MediaStream> {
     // If active stream already exists and video track is live, reuse it (NO PROMPT)
@@ -599,7 +621,7 @@ export class WebCaptureService implements ICaptureService {
     }
 
     const newCount = this.state.screenshotCount + 1;
-    const toastMsg = `📸 Saved #${newCount} (+${Math.floor(currentOffset / 60)}m ${currentOffset % 60}s)`;
+    const toastMsg = `#${newCount}`;
 
     this.updateState({
       screenshotCount: newCount,

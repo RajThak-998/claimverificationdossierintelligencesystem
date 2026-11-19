@@ -70,6 +70,12 @@ export interface ICaptureService {
   initSession(): Promise<MediaStream>;
 
   /**
+   * Pre-configures active case metadata without immediately starting recording.
+   * Enables manual recording start/stop directly from the floating overlay buttons.
+   */
+  prepareSession(caseId: string, options?: RecordingOptions): void;
+
+  /**
    * Terminates active MediaStream tracks and resets session state to idle.
    */
   endSession(): Promise<void>;

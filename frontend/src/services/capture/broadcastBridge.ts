@@ -10,6 +10,7 @@ export const CAPTURE_BUS_CHANNEL = 'motor_claim_capture_bus';
 
 export type BridgeMessage =
   | { type: 'STATE_UPDATE'; payload: CaptureState }
+  | { type: 'CMD_START_RECORDING' }
   | { type: 'CMD_TAKE_SCREENSHOT'; caption?: string }
   | { type: 'CMD_STOP_RECORDING' }
   | { type: 'CMD_PAUSE_RECORDING' }

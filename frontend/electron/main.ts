@@ -137,6 +137,7 @@ function createOverlayWindow(): BrowserWindow {
     height,
     x,
     y,
+    type: 'toolbar', // Windows WS_EX_TOOLWINDOW - prevents background WhatsApp from minimizing
     frame: false,
     transparent: true,
     resizable: false,
@@ -144,6 +145,7 @@ function createOverlayWindow(): BrowserWindow {
     hasShadow: false,
     alwaysOnTop: true,
     focusable: false, // Keeps focus pinned on WhatsApp Desktop call window!
+    acceptFirstMouse: true,
     show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),

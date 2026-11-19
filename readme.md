@@ -28,6 +28,7 @@ The **Motor Claim Verification & Dossier Intelligence Platform** is an enterpris
 ---
 
 ## ⚡ 2. The Bare Minimum to Run & Test (Quickest Path)
+> 💡 **For a dedicated teammate developer setup and Electron build guide, see [DEVELOPMENT.md](file:///C:/Development/claimverificationdossierintelligencesystem/DEVELOPMENT.md).**
 
 You do **not** need Docker installed or running to perform a quick local check. The backend has an automatic embedded database and local storage fallback.
 
@@ -57,7 +58,29 @@ To automatically verify that all 8 critical operational workflows are 100% opera
 
 ---
 
-## 🚀 3. Running with Full Production Infrastructure (Docker)
+## 💻 3. Windows Native Desktop App (Single Standalone `.exe`)
+
+The platform includes an enterprise **Electron** desktop wrapper tailored specifically for Windows claim investigators:
+
+* **Single Standalone `.exe` Delivery**: Build a 100% portable single executable (`frontend/release/Claim Verification Intelligence-Standalone.exe`) that requires zero installation and runs directly on any Windows PC.
+* **Always-On-Top Floating Matte Tool Windows**: Floating controls hover over the native Windows WhatsApp Desktop app with native `WS_EX_TOOLWINDOW` and click-through transparency, completely preventing background WhatsApp call windows from minimizing.
+* **Manual Recording Control**: Launching WhatsApp calls prepares the case and shows `[ ● REC ]`. Recording starts and stops purely on agent demand.
+* **Zero-Prompt Capture & Windows Loopback Audio**: Starts screen capture and system loopback audio with zero browser/OS permission prompts.
+* **Crash-Safe 5-Second Disk & Backend Streaming**: Streams video chunks to disk and backend every 5 seconds, supporting calls up to 2 hours without renderer memory leaks.
+* **Instant Numeric Frame Grab Badge**: Capturing snapshots shows a clean `#1`, `#2` badge without verbose toast overlays.
+* **Cloud Backend Connection**: Seamlessly connects to your cloud backend (via build-time `VITE_API_URL` or 1-click runtime configuration on the login screen).
+
+To compile the single `.exe`:
+```bash
+cd frontend
+npm run build
+npm run electron:build
+```
+Output: `frontend/release/Claim Verification Intelligence-Standalone.exe`
+
+---
+
+## 🚀 4. Running with Full Production Infrastructure (Docker)
 
 To simulate the exact production environment targeting **AWS (EC2/ECS behind ALB)**:
 
@@ -211,5 +234,5 @@ For deep dives into any module, refer to the Obsidian notes and living documenta
 - **Tele-Verification**: [`obs/06_Tele_Verification_and_Media_Recording_Pipeline.md`](file:///home/vanth_998/Documents/motor_claim_verification_dossier_intelligence_platform/obs/06_Tele_Verification_and_Media_Recording_Pipeline.md)
 - **Deployment & SSL**: [`obs/14_Hosting_Infrastructure_and_Deployment_Guide.md`](file:///home/vanth_998/Documents/motor_claim_verification_dossier_intelligence_platform/obs/14_Hosting_Infrastructure_and_Deployment_Guide.md)
 
-- **Starting the development for the Windows Cleints**
+
 

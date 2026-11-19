@@ -42,6 +42,8 @@ export class ElectronCaptureService implements ICaptureService {
   // Cross-Window Bridges
   private bridge: CaptureBroadcastBridge;
   private unsubscribeIpcCommand: (() => void) | null = null;
+  private pendingCaseId: string | null = null;
+  private pendingOptions?: RecordingOptions;
 
   // State
   private state: CaptureState = {
@@ -96,6 +98,16 @@ export class ElectronCaptureService implements ICaptureService {
 
   private handleOverlayCommand(command: string, payload?: any): void {
     switch (command) {
+      case 'CMD_START_RECORDING':
+        const targetCaseId = payload?.caseId || this.pendingCaseId || this.state.caseId;
+        if (targetCaseId) {
+          this.startRecording(targetCaseId, payload?.options || this.pendingOptions).catch((err) => {
+            console.error('Overlay start recording command error:', err);
+          });
+        } else {
+          console.warn('Cannot start recording: no active case ID configured.');
+        }
+        break;
       case 'CMD_TAKE_SCREENSHOT':
         this.takeScreenshot(typeof payload === 'string' ? payload : undefined).catch((err) => {
           console.error('Overlay screenshot command error:', err);
@@ -153,8 +165,20 @@ export class ElectronCaptureService implements ICaptureService {
   }
 
   // ═══════════════════════════════════════════════════════════════════════
-  // 1. Zero-Prompt Desktop Capture & Dual-Audio Mixing
+  // 1. Session Preparation & Desktop Capture
   // ═══════════════════════════════════════════════════════════════════════
+
+  public prepareSession(caseId: string, options?: RecordingOptions): void {
+    this.pendingCaseId = caseId;
+    this.pendingOptions = options;
+    this.updateState({
+      caseId,
+      caseNumber: options?.caseNumber || null,
+      contactPhone: options?.contactPhone || null,
+      contactName: options?.contactName || null,
+      error: null,
+    });
+  }
 
   public async initSession(): Promise<MediaStream> {
     if (this.sessionStream && this.sessionStream.active) {
@@ -661,7 +685,7 @@ export class ElectronCaptureService implements ICaptureService {
     }
 
     const newCount = this.state.screenshotCount + 1;
-    const toastMsg = `📸 Saved #${newCount} (+${Math.floor(currentOffset / 60)}m ${currentOffset % 60}s)`;
+    const toastMsg = `#${newCount}`;
 
     this.updateState({
       screenshotCount: newCount,

@@ -17,12 +17,20 @@
   "win": {
     "target": [
       {
+        "target": "portable",
+        "arch": ["x64"]
+      },
+      {
         "target": "nsis",
         "arch": ["x64"]
       }
     ],
     "requestedExecutionLevel": "asInvoker",
     "signAndEditExecutable": false
+  },
+  "portable": {
+    "artifactName": "${productName}-Standalone.${ext}",
+    "requestExecutionLevel": "user"
   },
   "nsis": {
     "oneClick": false,

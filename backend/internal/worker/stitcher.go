@@ -26,6 +26,25 @@ func NewStitcher(db *gorm.DB, sp storage.StorageProvider) *Stitcher {
 	return &Stitcher{db: db, storage: sp}
 }
 
+func findFFmpegBinary() string {
+	if p, err := exec.LookPath("ffmpeg"); err == nil {
+		return p
+	}
+	candidates := []string{
+		"bin/ffmpeg.exe",
+		"bin/ffmpeg",
+		"backend/bin/ffmpeg.exe",
+		`C:\ffmpeg\bin\ffmpeg.exe`,
+		`C:\ProgramData\chocolatey\bin\ffmpeg.exe`,
+	}
+	for _, c := range candidates {
+		if fi, err := os.Stat(c); err == nil && !fi.IsDir() {
+			return c
+		}
+	}
+	return "ffmpeg"
+}
+
 // StitchRecording chunks together using FFmpeg stream copy and calculates SHA-256
 func (s *Stitcher) StitchRecording(ctx context.Context, caseID, recordingID string) error {
 	log.Printf("🎬 Stitching chunks for case %s, recording %s", caseID, recordingID)
@@ -76,7 +95,8 @@ func (s *Stitcher) StitchRecording(ctx context.Context, caseID, recordingID stri
 	var fileSize int64
 
 	// Try executing ffmpeg
-	cmd := exec.CommandContext(ctx, "ffmpeg", "-y",
+	ffmpegBin := findFFmpegBinary()
+	cmd := exec.CommandContext(ctx, ffmpegBin, "-y",
 		"-f", "concat",
 		"-safe", "0",
 		"-i", concatPath,

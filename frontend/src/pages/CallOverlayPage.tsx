@@ -19,6 +19,9 @@ export const CallOverlayPage: React.FC = () => {
       electronAPI.setIgnoreMouseEvents(true, { forward: true });
 
       const onMouseMove = (e: MouseEvent) => {
+        // While dragging or clicking (any mouse button held down), NEVER toggle ignore mouse events!
+        if (e.buttons !== 0) return;
+
         const target = e.target as HTMLElement | null;
         // Check if cursor is over any element tagged with data-overlay-interactive="true"
         const isOverInteractive = !!target?.closest('[data-overlay-interactive="true"]');

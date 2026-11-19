@@ -733,18 +733,48 @@ const dossierTemplateHTML = `<!DOCTYPE html>
 </body>
 </html>`
 
-func renderHTMLToPDF(ctx context.Context, htmlContent []byte) ([]byte, error) {
-	candidates := []string{"chromium", "google-chrome", "google-chrome-stable", "chromium-browser"}
-	var chromePath string
-	var err error
+func findChromeBinary() string {
+	candidates := []string{
+		"google-chrome",
+		"google-chrome-stable",
+		"chromium",
+		"chromium-browser",
+		"chrome",
+		"msedge",
+		"edge",
+	}
 	for _, c := range candidates {
-		chromePath, err = exec.LookPath(c)
-		if err == nil {
-			break
+		if path, err := exec.LookPath(c); err == nil {
+			return path
 		}
 	}
+
+	windowsPaths := []string{
+		`C:\Program Files\Google\Chrome\Application\chrome.exe`,
+		`C:\Program Files (x86)\Google\Chrome\Application\chrome.exe`,
+		`C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`,
+		`C:\Program Files\Microsoft\Edge\Application\msedge.exe`,
+	}
+	if localAppData := os.Getenv("LOCALAPPDATA"); localAppData != "" {
+		windowsPaths = append(windowsPaths,
+			filepath.Join(localAppData, `Google\Chrome\Application\chrome.exe`),
+			filepath.Join(localAppData, `Microsoft\Edge\Application\msedge.exe`),
+		)
+	}
+
+	for _, p := range windowsPaths {
+		if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
+			return p
+		}
+	}
+
+	return ""
+}
+
+func renderHTMLToPDF(ctx context.Context, htmlContent []byte) ([]byte, error) {
+	chromePath := findChromeBinary()
 	if chromePath == "" {
-		return nil, fmt.Errorf("chromium/google-chrome not found in PATH")
+		return nil, fmt.Errorf("chromium/google-chrome/msedge not found in PATH or standard locations")
 	}
 
 	tmpDir, err := os.MkdirTemp("", "dossier-pdf-*")
@@ -755,26 +785,43 @@ func renderHTMLToPDF(ctx context.Context, htmlContent []byte) ([]byte, error) {
 
 	htmlPath := filepath.Join(tmpDir, "index.html")
 	pdfPath := filepath.Join(tmpDir, "output.pdf")
+	userDataDir := filepath.Join(tmpDir, "chrome-profile")
 
 	if err := os.WriteFile(htmlPath, htmlContent, 0644); err != nil {
 		return nil, fmt.Errorf("failed to write temp html: %w", err)
 	}
 
+	fileURL := "file:///" + filepath.ToSlash(htmlPath)
+
 	cmd := exec.CommandContext(ctx, chromePath,
-		"--headless",
+		"--headless=new",
 		"--disable-gpu",
 		"--no-sandbox",
+		"--user-data-dir="+userDataDir,
 		"--disable-dev-shm-usage",
 		"--run-all-compositor-stages-before-draw",
+		"--no-pdf-header-footer",
 		"--print-to-pdf="+pdfPath,
-		htmlPath,
+		fileURL,
 	)
 
 	var errBuf bytes.Buffer
 	cmd.Stderr = &errBuf
 
 	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("chromium render error (%v): %s", err, errBuf.String())
+		// Fallback without =new in case older chromium
+		fallbackCmd := exec.CommandContext(ctx, chromePath,
+			"--headless",
+			"--disable-gpu",
+			"--no-sandbox",
+			"--user-data-dir="+userDataDir,
+			"--disable-dev-shm-usage",
+			"--print-to-pdf="+pdfPath,
+			fileURL,
+		)
+		if fallbackErr := fallbackCmd.Run(); fallbackErr != nil {
+			return nil, fmt.Errorf("chromium render error (%v): %s", err, errBuf.String())
+		}
 	}
 
 	pdfBytes, err := os.ReadFile(pdfPath)
