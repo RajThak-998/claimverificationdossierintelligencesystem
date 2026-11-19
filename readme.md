@@ -210,3 +210,6 @@ For deep dives into any module, refer to the Obsidian notes and living documenta
 - **Database Schema**: [`obs/05_Database_Schema_and_Entity_Relationships.md`](file:///home/vanth_998/Documents/motor_claim_verification_dossier_intelligence_platform/obs/05_Database_Schema_and_Entity_Relationships.md)
 - **Tele-Verification**: [`obs/06_Tele_Verification_and_Media_Recording_Pipeline.md`](file:///home/vanth_998/Documents/motor_claim_verification_dossier_intelligence_platform/obs/06_Tele_Verification_and_Media_Recording_Pipeline.md)
 - **Deployment & SSL**: [`obs/14_Hosting_Infrastructure_and_Deployment_Guide.md`](file:///home/vanth_998/Documents/motor_claim_verification_dossier_intelligence_platform/obs/14_Hosting_Infrastructure_and_Deployment_Guide.md)
+
+- **Starting the development for the Windows Cleints**
+
