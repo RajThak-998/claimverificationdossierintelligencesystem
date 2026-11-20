@@ -35,7 +35,7 @@ export const CallOverlayPage: React.FC = () => {
       className={
         mode === 'both'
           ? 'w-screen h-screen relative bg-transparent overflow-hidden select-none'
-          : 'w-screen h-screen flex items-center justify-center bg-transparent overflow-hidden select-none p-1'
+          : 'w-full h-full flex items-center justify-center bg-transparent overflow-hidden select-none'
       }
     >
       <CallOverlay

@@ -141,7 +141,12 @@ function createRecOverlayWindow() {
 
   recOverlayWindow = new BrowserWindow({
     width: 240,
-    height: 60,
+    height: 56,
+    minWidth: 240,
+    maxWidth: 240,
+    minHeight: 56,
+    maxHeight: 56,
+    useContentSize: true,
     x: initialX,
     y: initialY,
     type: 'toolbar', // Windows WS_EX_TOOLWINDOW - prevents background WhatsApp from minimizing
@@ -205,7 +210,12 @@ function createCapOverlayWindow() {
 
   capOverlayWindow = new BrowserWindow({
     width: 180,
-    height: 60,
+    height: 56,
+    minWidth: 180,
+    maxWidth: 180,
+    minHeight: 56,
+    maxHeight: 56,
+    useContentSize: true,
     x: initialX,
     y: initialY,
     type: 'toolbar', // Windows WS_EX_TOOLWINDOW - prevents background WhatsApp from minimizing
@@ -309,12 +319,23 @@ function registerIpcHandlers() {
   ipcMain.on('overlay-window-move', (event, { deltaX, deltaY }) => {
     const win = BrowserWindow.fromWebContents(event.sender);
     if (win && !win.isDestroyed()) {
+      const isRec = win === recOverlayWindow;
+      const targetWidth = isRec ? 240 : 180;
+      const targetHeight = 56;
+
       const [currentX, currentY] = win.getPosition();
       const newX = Math.round(currentX + deltaX);
       const newY = Math.round(currentY + deltaY);
-      win.setPosition(newX, newY, false);
 
-      if (win === recOverlayWindow) {
+      // Explicitly lock width and height so Windows DPI scaling never inflates the window!
+      win.setBounds({
+        x: newX,
+        y: newY,
+        width: targetWidth,
+        height: targetHeight,
+      });
+
+      if (isRec) {
         recWindowPos = { x: newX, y: newY };
       } else if (win === capOverlayWindow) {
         capWindowPos = { x: newX, y: newY };

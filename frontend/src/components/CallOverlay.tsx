@@ -334,8 +334,10 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({ mode = 'both', onStop,
 
   const handleNativePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!dragNativeRef.current.isDragging) return;
-    const deltaX = e.screenX - dragNativeRef.current.lastScreenX;
-    const deltaY = e.screenY - dragNativeRef.current.lastScreenY;
+    const deltaX = Math.round(e.screenX - dragNativeRef.current.lastScreenX);
+    const deltaY = Math.round(e.screenY - dragNativeRef.current.lastScreenY);
+    if (deltaX === 0 && deltaY === 0) return;
+
     dragNativeRef.current.lastScreenX = e.screenX;
     dragNativeRef.current.lastScreenY = e.screenY;
 
@@ -362,8 +364,8 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({ mode = 'both', onStop,
         onPointerDown={handleNativePointerDown}
         onPointerMove={handleNativePointerMove}
         onPointerUp={handleNativePointerUp}
-        style={{ touchAction: 'none' }}
-        className="w-full h-full inline-flex items-center justify-between gap-1.5 px-3 py-1.5 rounded-full bg-zinc-900/95 backdrop-blur-md border border-zinc-700/60 shadow-xl shadow-black/50 text-white select-none cursor-grab active:cursor-grabbing hover:border-zinc-500/70 transition-colors"
+        style={{ width: '228px', height: '46px', touchAction: 'none' }}
+        className="w-[228px] h-[46px] max-w-[228px] max-h-[46px] shrink-0 inline-flex items-center justify-between gap-1.5 px-3 py-1 rounded-full bg-zinc-900/95 backdrop-blur-md border border-zinc-700/60 shadow-xl shadow-black/50 text-white select-none cursor-grab active:cursor-grabbing hover:border-zinc-500/70 transition-colors"
         title="Drag anywhere on your screen"
       >
         <GripVertical className="w-3.5 h-3.5 text-zinc-500 hover:text-zinc-300 pointer-events-none shrink-0" />
@@ -419,9 +421,9 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({ mode = 'both', onStop,
         onPointerDown={handleNativePointerDown}
         onPointerMove={handleNativePointerMove}
         onPointerUp={handleNativePointerUp}
-        style={{ touchAction: 'none' }}
-        className={`w-full h-full inline-flex items-center justify-between gap-1.5 px-3 py-1.5 rounded-full bg-zinc-900/95 backdrop-blur-md border border-zinc-700/60 shadow-xl shadow-black/50 text-white select-none cursor-grab active:cursor-grabbing hover:border-zinc-500/70 transition-all ${
-          capFlash ? 'ring-2 ring-emerald-400 scale-105' : ''
+        style={{ width: '168px', height: '46px', touchAction: 'none' }}
+        className={`w-[168px] h-[46px] max-w-[168px] max-h-[46px] shrink-0 inline-flex items-center justify-between gap-1.5 px-3 py-1 rounded-full bg-zinc-900/95 backdrop-blur-md border border-zinc-700/60 shadow-xl shadow-black/50 text-white select-none cursor-grab active:cursor-grabbing hover:border-zinc-500/70 transition-all ${
+          capFlash ? 'ring-2 ring-emerald-400' : ''
         }`}
         title="Drag anywhere on your screen"
       >
