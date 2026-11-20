@@ -15,7 +15,8 @@ const electronAPI = {
 
   overlay: {
     show: (params) => ipcRenderer.invoke('overlay-show', params),
-    hide: () => ipcRenderer.invoke('overlay-hide'),
+    hide: (target) => ipcRenderer.invoke('overlay-hide', target),
+    move: (deltaX, deltaY) => ipcRenderer.send('overlay-window-move', { deltaX, deltaY }),
     sendState: (state) => ipcRenderer.send('overlay-state-sync', state),
     onState: (callback) => {
       const handler = (_event, data) => callback(data);

@@ -12,7 +12,10 @@ const path = require('path');
 const fs = require('fs');
 
 let mainWindow = null;
-let overlayWindow = null;
+let recOverlayWindow = null;
+let capOverlayWindow = null;
+let recWindowPos = null;
+let capWindowPos = null;
 let powerSaveBlockerId = null;
 
 // Active disk streams for crash-safe recording
@@ -93,8 +96,11 @@ function createMainWindow() {
 
   mainWindow.on('closed', () => {
     mainWindow = null;
-    if (overlayWindow && !overlayWindow.isDestroyed()) {
-      overlayWindow.close();
+    if (recOverlayWindow && !recOverlayWindow.isDestroyed()) {
+      recOverlayWindow.close();
+    }
+    if (capOverlayWindow && !capOverlayWindow.isDestroyed()) {
+      capOverlayWindow.close();
     }
   });
 
@@ -117,21 +123,27 @@ function createMainWindow() {
 }
 
 /**
- * Creates the frameless, transparent, always-on-top overlay window (/call-overlay).
+ * Creates the compact, frameless, always-on-top Recording / Stop overlay window.
  */
-function createOverlayWindow() {
-  if (overlayWindow && !overlayWindow.isDestroyed()) {
-    return overlayWindow;
+function createRecOverlayWindow() {
+  if (recOverlayWindow && !recOverlayWindow.isDestroyed()) {
+    return recOverlayWindow;
   }
 
   const primaryDisplay = screen.getPrimaryDisplay();
-  const { x, y, width, height } = primaryDisplay.workArea;
+  const workArea = primaryDisplay.workArea;
 
-  overlayWindow = new BrowserWindow({
-    width,
-    height,
-    x,
-    y,
+  const defaultX = Math.max(workArea.x + 20, Math.floor(workArea.x + workArea.width / 2) - 250);
+  const defaultY = Math.max(workArea.y + 20, workArea.y + workArea.height - 80);
+
+  const initialX = recWindowPos ? recWindowPos.x : defaultX;
+  const initialY = recWindowPos ? recWindowPos.y : defaultY;
+
+  recOverlayWindow = new BrowserWindow({
+    width: 240,
+    height: 60,
+    x: initialX,
+    y: initialY,
     type: 'toolbar', // Windows WS_EX_TOOLWINDOW - prevents background WhatsApp from minimizing
     frame: false,
     transparent: true,
@@ -150,32 +162,92 @@ function createOverlayWindow() {
     },
   });
 
-  // Pins window above native Windows WhatsApp Desktop at all times
-  overlayWindow.setAlwaysOnTop(true, 'screen-saver');
-  overlayWindow.setVisibleOnAllWorkspaces(true);
-
-  // Click-through by default on transparent canvas
-  overlayWindow.setIgnoreMouseEvents(true, { forward: true });
+  recOverlayWindow.setAlwaysOnTop(true, 'screen-saver');
+  recOverlayWindow.setVisibleOnAllWorkspaces(true);
 
   const isDev = !app.isPackaged && process.env.NODE_ENV !== 'production';
   const startUrl = process.env.ELECTRON_START_URL || 'http://localhost:3000';
 
   if (isDev) {
-    overlayWindow.loadURL(`${startUrl}#/call-overlay`).catch(() => {
+    recOverlayWindow.loadURL(`${startUrl}#/call-overlay?mode=rec`).catch(() => {
       const distPath = path.join(__dirname, '../dist/index.html');
       if (fs.existsSync(distPath)) {
-        overlayWindow && overlayWindow.loadFile(distPath, { hash: '/call-overlay' });
+        recOverlayWindow && recOverlayWindow.loadFile(distPath, { hash: '/call-overlay?mode=rec' });
       }
     });
   } else {
-    overlayWindow.loadFile(path.join(__dirname, '../dist/index.html'), { hash: '/call-overlay' });
+    recOverlayWindow.loadFile(path.join(__dirname, '../dist/index.html'), { hash: '/call-overlay?mode=rec' });
   }
 
-  overlayWindow.on('closed', () => {
-    overlayWindow = null;
+  recOverlayWindow.on('closed', () => {
+    recOverlayWindow = null;
   });
 
-  return overlayWindow;
+  return recOverlayWindow;
+}
+
+/**
+ * Creates the compact, frameless, always-on-top Screenshot Capture overlay window.
+ */
+function createCapOverlayWindow() {
+  if (capOverlayWindow && !capOverlayWindow.isDestroyed()) {
+    return capOverlayWindow;
+  }
+
+  const primaryDisplay = screen.getPrimaryDisplay();
+  const workArea = primaryDisplay.workArea;
+
+  const defaultX = Math.max(workArea.x + 20, Math.floor(workArea.x + workArea.width / 2) + 20);
+  const defaultY = Math.max(workArea.y + 20, workArea.y + workArea.height - 80);
+
+  const initialX = capWindowPos ? capWindowPos.x : defaultX;
+  const initialY = capWindowPos ? capWindowPos.y : defaultY;
+
+  capOverlayWindow = new BrowserWindow({
+    width: 180,
+    height: 60,
+    x: initialX,
+    y: initialY,
+    type: 'toolbar', // Windows WS_EX_TOOLWINDOW - prevents background WhatsApp from minimizing
+    frame: false,
+    transparent: true,
+    resizable: false,
+    skipTaskbar: true,
+    hasShadow: false,
+    alwaysOnTop: true,
+    focusable: false, // Keeps focus pinned on WhatsApp Desktop call window!
+    acceptFirstMouse: true,
+    show: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.cjs'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      backgroundThrottling: false,
+    },
+  });
+
+  capOverlayWindow.setAlwaysOnTop(true, 'screen-saver');
+  capOverlayWindow.setVisibleOnAllWorkspaces(true);
+
+  const isDev = !app.isPackaged && process.env.NODE_ENV !== 'production';
+  const startUrl = process.env.ELECTRON_START_URL || 'http://localhost:3000';
+
+  if (isDev) {
+    capOverlayWindow.loadURL(`${startUrl}#/call-overlay?mode=cap`).catch(() => {
+      const distPath = path.join(__dirname, '../dist/index.html');
+      if (fs.existsSync(distPath)) {
+        capOverlayWindow && capOverlayWindow.loadFile(distPath, { hash: '/call-overlay?mode=cap' });
+      }
+    });
+  } else {
+    capOverlayWindow.loadFile(path.join(__dirname, '../dist/index.html'), { hash: '/call-overlay?mode=cap' });
+  }
+
+  capOverlayWindow.on('closed', () => {
+    capOverlayWindow = null;
+  });
+
+  return capOverlayWindow;
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -233,7 +305,24 @@ function registerIpcHandlers() {
     }
   });
 
-  // Dynamic click-through toggle for frameless transparent overlay
+  // Move overlay window dynamically when dragged by user
+  ipcMain.on('overlay-window-move', (event, { deltaX, deltaY }) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (win && !win.isDestroyed()) {
+      const [currentX, currentY] = win.getPosition();
+      const newX = Math.round(currentX + deltaX);
+      const newY = Math.round(currentY + deltaY);
+      win.setPosition(newX, newY, false);
+
+      if (win === recOverlayWindow) {
+        recWindowPos = { x: newX, y: newY };
+      } else if (win === capOverlayWindow) {
+        capWindowPos = { x: newX, y: newY };
+      }
+    }
+  });
+
+  // Dynamic click-through toggle for frameless transparent overlay (backwards compatible)
   ipcMain.on('overlay-ignore-mouse-events', (event, ignore, options) => {
     const win = BrowserWindow.fromWebContents(event.sender);
     if (win && !win.isDestroyed()) {
@@ -241,29 +330,48 @@ function registerIpcHandlers() {
     }
   });
 
-  // Show / Hide overlay
+  // Show / Hide compact overlay windows
   ipcMain.handle('overlay-show', (_event, params) => {
-    const win = overlayWindow && !overlayWindow.isDestroyed() ? overlayWindow : createOverlayWindow();
-    win.showInactive();
+    const recWin = recOverlayWindow && !recOverlayWindow.isDestroyed() ? recOverlayWindow : createRecOverlayWindow();
+    const capWin = capOverlayWindow && !capOverlayWindow.isDestroyed() ? capOverlayWindow : createCapOverlayWindow();
+
+    recWin.showInactive();
+    capWin.showInactive();
+
     if (params) {
-      win.webContents.send('overlay-state-sync', params);
+      recWin.webContents.send('overlay-state-sync', params);
+      capWin.webContents.send('overlay-state-sync', params);
     }
   });
 
-  ipcMain.handle('overlay-hide', () => {
-    if (overlayWindow && !overlayWindow.isDestroyed()) {
-      overlayWindow.hide();
+  ipcMain.handle('overlay-hide', (_event, target) => {
+    if (target === 'rec' && recOverlayWindow && !recOverlayWindow.isDestroyed()) {
+      recOverlayWindow.hide();
+      return;
+    }
+    if (target === 'cap' && capOverlayWindow && !capOverlayWindow.isDestroyed()) {
+      capOverlayWindow.hide();
+      return;
+    }
+    if (recOverlayWindow && !recOverlayWindow.isDestroyed()) {
+      recOverlayWindow.hide();
+    }
+    if (capOverlayWindow && !capOverlayWindow.isDestroyed()) {
+      capOverlayWindow.hide();
     }
   });
 
-  // Relay state from main window to overlay window
+  // Relay state from main window to overlay windows
   ipcMain.on('overlay-state-sync', (_event, state) => {
-    if (overlayWindow && !overlayWindow.isDestroyed()) {
-      overlayWindow.webContents.send('overlay-state-sync', state);
+    if (recOverlayWindow && !recOverlayWindow.isDestroyed()) {
+      recOverlayWindow.webContents.send('overlay-state-sync', state);
+    }
+    if (capOverlayWindow && !capOverlayWindow.isDestroyed()) {
+      capOverlayWindow.webContents.send('overlay-state-sync', state);
     }
   });
 
-  // Relay actions from overlay window to main window (STOP, CAPTURE, etc.)
+  // Relay actions from overlay window to main window (START, STOP, CAPTURE, etc.)
   ipcMain.on('overlay-command', (_event, message) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('overlay-command', message);
@@ -272,8 +380,11 @@ function registerIpcHandlers() {
 
   // Relay snapshot toast feedback to overlay window
   ipcMain.on('overlay-toast', (_event, message) => {
-    if (overlayWindow && !overlayWindow.isDestroyed()) {
-      overlayWindow.webContents.send('overlay-toast', message);
+    if (capOverlayWindow && !capOverlayWindow.isDestroyed()) {
+      capOverlayWindow.webContents.send('overlay-toast', message);
+    }
+    if (recOverlayWindow && !recOverlayWindow.isDestroyed()) {
+      recOverlayWindow.webContents.send('overlay-toast', message);
     }
   });
 

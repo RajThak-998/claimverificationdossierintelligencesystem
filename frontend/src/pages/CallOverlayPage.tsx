@@ -1,47 +1,26 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { CallOverlay } from '../components/CallOverlay';
 
 export const CallOverlayPage: React.FC = () => {
+  const [mode, setMode] = useState<'rec' | 'cap' | 'both'>('both');
+
   useEffect(() => {
-    // Set document background transparent for frameless/floating overlay
+    // Set document background transparent for frameless floating pill window
     document.documentElement.style.background = 'transparent';
     document.body.style.background = 'transparent';
     document.body.style.margin = '0';
     document.body.style.padding = '0';
     document.body.style.overflow = 'hidden';
 
-    // Click-through toggle for Electron:
-    // If hovering over either the REC pill or the CAPTURE pill, enable mouse events.
-    // If hovering outside over the transparent canvas, forward events through to WhatsApp.
-    const electronAPI = (window as any).electronAPI;
-    if (electronAPI?.setIgnoreMouseEvents) {
-      let isIgnoring = true;
-      electronAPI.setIgnoreMouseEvents(true, { forward: true });
-
-      const onMouseMove = (e: MouseEvent) => {
-        // While dragging or clicking (any mouse button held down), NEVER toggle ignore mouse events!
-        if (e.buttons !== 0) return;
-
-        const target = e.target as HTMLElement | null;
-        // Check if cursor is over any element tagged with data-overlay-interactive="true"
-        const isOverInteractive = !!target?.closest('[data-overlay-interactive="true"]');
-
-        if (isOverInteractive && isIgnoring) {
-          electronAPI.setIgnoreMouseEvents(false);
-          isIgnoring = false;
-        } else if (!isOverInteractive && !isIgnoring) {
-          electronAPI.setIgnoreMouseEvents(true, { forward: true });
-          isIgnoring = true;
-        }
-      };
-
-      window.addEventListener('mousemove', onMouseMove);
-      return () => {
-        window.removeEventListener('mousemove', onMouseMove);
-        document.documentElement.style.background = '';
-        document.body.style.background = '';
-        document.body.style.overflow = '';
-      };
+    // Parse mode from URL search/hash
+    const hash = window.location.hash || '';
+    const search = window.location.search || '';
+    if (hash.includes('mode=rec') || search.includes('mode=rec')) {
+      setMode('rec');
+    } else if (hash.includes('mode=cap') || search.includes('mode=cap')) {
+      setMode('cap');
+    } else {
+      setMode('both');
     }
 
     return () => {
@@ -52,12 +31,19 @@ export const CallOverlayPage: React.FC = () => {
   }, []);
 
   return (
-    <div className="w-screen h-screen relative bg-transparent overflow-hidden select-none">
+    <div
+      className={
+        mode === 'both'
+          ? 'w-screen h-screen relative bg-transparent overflow-hidden select-none'
+          : 'w-screen h-screen flex items-center justify-center bg-transparent overflow-hidden select-none p-1'
+      }
+    >
       <CallOverlay
+        mode={mode}
         onClose={() => {
           const electronAPI = (window as any).electronAPI;
           if (electronAPI?.overlay?.hide) {
-            electronAPI.overlay.hide();
+            electronAPI.overlay.hide(mode !== 'both' ? mode : undefined);
           } else {
             window.close();
           }

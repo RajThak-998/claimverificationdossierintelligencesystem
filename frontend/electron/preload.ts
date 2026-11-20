@@ -22,7 +22,8 @@ export interface ElectronAPI {
   // Overlay Window Management & IPC Synchronization
   overlay: {
     show: (params?: { caseId?: string | null; caseNumber?: string | null; contactPhone?: string | null; contactName?: string | null }) => Promise<void>;
-    hide: () => Promise<void>;
+    hide: (target?: string) => Promise<void>;
+    move: (deltaX: number, deltaY: number) => void;
     sendState: (state: any) => void;
     onState: (callback: (state: any) => void) => () => void;
     sendCommand: (command: string, payload?: any) => void;
@@ -54,7 +55,8 @@ const electronAPI: ElectronAPI = {
 
   overlay: {
     show: (params) => ipcRenderer.invoke('overlay-show', params),
-    hide: () => ipcRenderer.invoke('overlay-hide'),
+    hide: (target) => ipcRenderer.invoke('overlay-hide', target),
+    move: (deltaX, deltaY) => ipcRenderer.send('overlay-window-move', { deltaX, deltaY }),
     sendState: (state) => ipcRenderer.send('overlay-state-sync', state),
     onState: (callback) => {
       const handler = (_: any, data: any) => callback(data);
