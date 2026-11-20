@@ -201,7 +201,7 @@ export class ElectronCaptureService implements ICaptureService {
         video: {
           width: { ideal: 1280, max: 1280 },
           height: { ideal: 720, max: 720 },
-          frameRate: { ideal: 24, max: 30 },
+          frameRate: { ideal: 15, max: 20 },
         },
         audio: true, // Captures Windows system / WhatsApp audio via loopback
       });
@@ -420,10 +420,10 @@ export class ElectronCaptureService implements ICaptureService {
       }
     }
 
-    // Initialize MediaRecorder capped at 720p, ~1.2 Mbps video, 96 kbps audio
+    // Initialize MediaRecorder capped at 720p 15fps, ~650 kbps video, 96 kbps audio
     const recorder = new MediaRecorder(this.sessionStream, {
       ...(mimeType ? { mimeType } : {}),
-      videoBitsPerSecond: 1_200_000,
+      videoBitsPerSecond: 650_000,
       audioBitsPerSecond: 96_000,
     });
 
@@ -471,8 +471,8 @@ export class ElectronCaptureService implements ICaptureService {
 
     this.mediaRecorder = recorder;
 
-    // Start timeslice chunks every 5000ms (5 seconds)
-    recorder.start(5000);
+    // Start timeslice chunks every 15000ms (15 seconds)
+    recorder.start(15000);
 
     // Launch the frameless always-on-top overlay window
     await this.launchOverlay();

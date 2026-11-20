@@ -33,13 +33,14 @@ func main() {
 	var err error
 
 	if cfg.StorageDriver == "minio" || cfg.StorageDriver == "s3" {
-		log.Printf("Connecting to MinIO / S3 at %s (bucket: %s)...", cfg.StorageEndpoint, cfg.StorageBucket)
+		log.Printf("Connecting to MinIO / S3 at %s (bucket: %s, region: %s)...", cfg.StorageEndpoint, cfg.StorageBucket, cfg.StorageRegion)
 		storageProvider, err = storage.NewMinIOStorageProvider(
 			cfg.StorageEndpoint,
 			cfg.StorageAccessKey,
 			cfg.StorageSecretKey,
 			cfg.StorageBucket,
 			cfg.StorageUseSSL,
+			cfg.StorageRegion,
 		)
 		if err != nil {
 			log.Printf("⚠️ MinIO init failed: %v. Falling back to local storage provider.", err)
@@ -128,11 +129,21 @@ func main() {
 	corsConfig.AllowMethods = []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}
 	r.Use(cors.New(corsConfig))
 
-	// Static Storage File Serving (for LocalStorageProvider)
+	// Static Storage File Serving (with S3/MinIO Native Range Seeking Support)
 	storageFileHandler := func(c *gin.Context) {
 		relPath := strings.TrimPrefix(c.Param("filepath"), "/")
 		cleanPath := filepath.Clean(relPath)
 		fullPath := filepath.Join(cfg.StorageBaseDir, cleanPath)
+
+		// When cfg.StorageDriver is "s3" or "minio", generate a 15-minute presigned URL
+		// and redirect so S3/MinIO handles HTTP 206 Range requests and video seeking natively
+		if cfg.StorageDriver == "s3" || cfg.StorageDriver == "minio" {
+			signedURL, err := storageProvider.GetSignedURL(c.Request.Context(), cleanPath, 15*time.Minute)
+			if err == nil && signedURL != "" {
+				c.Redirect(http.StatusTemporaryRedirect, signedURL)
+				return
+			}
+		}
 
 		if fi, err := os.Stat(fullPath); err == nil && !fi.IsDir() {
 			if strings.HasSuffix(cleanPath, ".pdf") {
@@ -140,6 +151,8 @@ func main() {
 				c.Header("Content-Type", "application/pdf")
 			} else if strings.HasSuffix(cleanPath, ".webm") {
 				c.Header("Content-Type", "video/webm")
+			} else if strings.HasSuffix(cleanPath, ".mp4") {
+				c.Header("Content-Type", "video/mp4")
 			}
 			c.File(fullPath)
 			return
@@ -165,6 +178,8 @@ func main() {
 			mimeType = "image/jpeg"
 		} else if strings.HasSuffix(cleanPath, ".webm") {
 			mimeType = "video/webm"
+		} else if strings.HasSuffix(cleanPath, ".mp4") {
+			mimeType = "video/mp4"
 		}
 		c.DataFromReader(http.StatusOK, -1, mimeType, reader, nil)
 	}

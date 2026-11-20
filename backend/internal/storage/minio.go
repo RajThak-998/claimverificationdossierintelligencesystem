@@ -18,13 +18,19 @@ type MinIOStorageProvider struct {
 	bucket string
 }
 
-func NewMinIOStorageProvider(endpoint, accessKey, secretKey, bucket string, useSSL bool) (*MinIOStorageProvider, error) {
+func NewMinIOStorageProvider(endpoint, accessKey, secretKey, bucket string, useSSL bool, region ...string) (*MinIOStorageProvider, error) {
 	cleanEndpoint := strings.TrimPrefix(endpoint, "http://")
 	cleanEndpoint = strings.TrimPrefix(cleanEndpoint, "https://")
+
+	reg := "ap-south-1"
+	if len(region) > 0 && region[0] != "" {
+		reg = region[0]
+	}
 
 	client, err := minio.New(cleanEndpoint, &minio.Options{
 		Creds:  credentials.NewStaticV4(accessKey, secretKey, ""),
 		Secure: useSSL,
+		Region: reg,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to init minio client: %w", err)
@@ -36,7 +42,7 @@ func NewMinIOStorageProvider(endpoint, accessKey, secretKey, bucket string, useS
 
 	exists, err := client.BucketExists(ctx, bucket)
 	if err == nil && !exists {
-		_ = client.MakeBucket(ctx, bucket, minio.MakeBucketOptions{})
+		_ = client.MakeBucket(ctx, bucket, minio.MakeBucketOptions{Region: reg})
 	}
 
 	return &MinIOStorageProvider{

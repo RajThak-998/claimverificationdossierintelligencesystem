@@ -90,24 +90,31 @@ func (s *Stitcher) StitchRecording(ctx context.Context, caseID, recordingID stri
 	}
 	concatFile.Close()
 
-	masterLocalPath := filepath.Join(scratchDir, "master.webm")
+	masterLocalPath := filepath.Join(scratchDir, "master_verified.mp4")
 	var checksum string
 	var fileSize int64
 
-	// Try executing ffmpeg
+	// Transcode to seekable 15fps H.264 MP4 with faststart flags
 	ffmpegBin := findFFmpegBinary()
 	cmd := exec.CommandContext(ctx, ffmpegBin, "-y",
 		"-f", "concat",
 		"-safe", "0",
 		"-i", concatPath,
-		"-c", "copy",
+		"-c:v", "libx264",
+		"-preset", "veryfast",
+		"-crf", "28",
+		"-r", "15",
+		"-c:a", "aac",
+		"-b:a", "64k",
+		"-movflags", "+faststart",
 		masterLocalPath,
 	)
 
 	if out, err := cmd.CombinedOutput(); err != nil {
-		log.Printf("FFmpeg failed: %v (%s). Fallback to direct chunk byte concatenation", err, string(out))
-		// Fallback: byte-wise append
-		masterOut, err := os.Create(masterLocalPath)
+		log.Printf("FFmpeg transcoding failed: %v (%s). Fallback to direct chunk byte concatenation", err, string(out))
+		// Fallback: byte-wise append if FFmpeg binary missing/fails
+		fallbackPath := filepath.Join(scratchDir, "master_verified.webm")
+		masterOut, err := os.Create(fallbackPath)
 		if err != nil {
 			return err
 		}
@@ -124,8 +131,9 @@ func (s *Stitcher) StitchRecording(ctx context.Context, caseID, recordingID stri
 		}
 		masterOut.Close()
 		checksum = hex.EncodeToString(hasher.Sum(nil))
+		masterLocalPath = fallbackPath
 	} else {
-		// Calculate SHA-256 on FFmpeg output
+		// Calculate SHA-256 checksum on the final stitched MP4 output file before upload
 		masterFile, err := os.Open(masterLocalPath)
 		if err != nil {
 			return err
@@ -144,15 +152,21 @@ func (s *Stitcher) StitchRecording(ctx context.Context, caseID, recordingID stri
 		fileSize = fi.Size()
 	}
 
+	ext := filepath.Ext(masterLocalPath)
+	mimeType := "video/mp4"
+	if ext == ".webm" {
+		mimeType = "video/webm"
+	}
+
 	// Upload Master File to StorageProvider
-	masterStoragePath := fmt.Sprintf("cases/%s/recordings/%s/master_verified.webm", caseID, recordingID)
+	masterStoragePath := fmt.Sprintf("cases/%s/recordings/%s/master_verified%s", caseID, recordingID, ext)
 	masterFile, err := os.Open(masterLocalPath)
 	if err != nil {
 		return err
 	}
 	defer masterFile.Close()
 
-	_, err = s.storage.UploadFile(ctx, masterFile, masterStoragePath, fileSize, "video/webm")
+	_, err = s.storage.UploadFile(ctx, masterFile, masterStoragePath, fileSize, mimeType)
 	if err != nil {
 		return fmt.Errorf("failed to upload master recording: %w", err)
 	}
@@ -163,8 +177,24 @@ func (s *Stitcher) StitchRecording(ctx context.Context, caseID, recordingID stri
 		"sha256_checksum":     checksum,
 		"status":              models.RecordingReady,
 		"file_size_bytes":     fileSize,
+		"mime_type":           mimeType,
 	})
 
 	log.Printf("✅ Recording %s stitched successfully. SHA-256: %s", recordingID, checksum)
+
+	// Clean up all individual chunk objects from storage provider
+	for _, chunk := range chunks {
+		if chunk.StoragePath != "" {
+			if delErr := s.storage.DeleteFile(ctx, chunk.StoragePath); delErr != nil {
+				log.Printf("Warning: failed to delete chunk object %s: %v", chunk.StoragePath, delErr)
+			}
+		}
+	}
+
+	// Clean up recording_chunks DB records
+	if delDbErr := s.db.Where("recording_id = ?", recordingID).Delete(&models.RecordingChunk{}).Error; delDbErr != nil {
+		log.Printf("Warning: failed to delete recording chunks from DB for recording %s: %v", recordingID, delDbErr)
+	}
+
 	return nil
 }

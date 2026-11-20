@@ -41,6 +41,7 @@ func main() {
 			cfg.StorageSecretKey,
 			cfg.StorageBucket,
 			cfg.StorageUseSSL,
+			cfg.StorageRegion,
 		)
 		if err != nil {
 			storageProvider, _ = storage.NewLocalStorageProvider(cfg.StorageBaseDir, cfg.StorageBaseURL)

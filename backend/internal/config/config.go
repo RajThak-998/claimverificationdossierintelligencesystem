@@ -43,6 +43,7 @@ type Config struct {
 	StorageBaseURL           string
 	StorageEndpoint          string
 	StorageBucket            string
+	StorageRegion            string
 	StorageAccessKey         string
 	StorageSecretKey         string
 	StorageUseSSL            bool
@@ -114,6 +115,7 @@ func LoadConfig() *Config {
 		StorageBaseURL:          getEnv("STORAGE_BASE_URL", "http://localhost:8080"),
 		StorageEndpoint:         getEnv("STORAGE_ENDPOINT", "localhost:9000"),
 		StorageBucket:           getEnv("STORAGE_BUCKET", "motor-claims-vault"),
+		StorageRegion:           getEnv("STORAGE_REGION", "ap-south-1"),
 		StorageAccessKey:        getEnv("STORAGE_ACCESS_KEY", "minioadmin"),
 		StorageSecretKey:        getEnv("STORAGE_SECRET_KEY", "minioadminpassword123"),
 		StorageUseSSL:           getEnvBool("STORAGE_USE_SSL", false),

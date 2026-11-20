@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"motor-platform/internal/auth"
@@ -284,9 +285,19 @@ func (h *RecordingHandler) UploadScreenshot(c *gin.Context) {
 	defer fileReader.Close()
 
 	now := time.Now().UTC()
-	storagePath := fmt.Sprintf("cases/%s/screenshots/shot_%d.png", caseID, now.UnixNano())
+	contentType := fileHeader.Header.Get("Content-Type")
+	ext := ".jpg"
+	if contentType == "image/png" || strings.HasSuffix(strings.ToLower(fileHeader.Filename), ".png") {
+		ext = ".png"
+		contentType = "image/png"
+	} else {
+		ext = ".jpg"
+		contentType = "image/jpeg"
+	}
 
-	_, err = h.storageProvider.UploadFile(c.Request.Context(), fileReader, storagePath, fileHeader.Size, "image/png")
+	storagePath := fmt.Sprintf("cases/%s/screenshots/shot_%d%s", caseID, now.UnixNano(), ext)
+
+	_, err = h.storageProvider.UploadFile(c.Request.Context(), fileReader, storagePath, fileHeader.Size, contentType)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "storage error: " + err.Error()})
 		return
